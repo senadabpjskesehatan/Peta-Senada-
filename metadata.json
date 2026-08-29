@@ -1,0 +1,6 @@
+{
+  "name": "Dashboard Monitoring Layanan & SLA",
+  "description": "Dashboard monitoring layanan informasi, permintaan, dan pengaduan serta SLA tindaklanjut dilengkapi pemetaan kota di Indonesia dan integrasi Google Sheets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

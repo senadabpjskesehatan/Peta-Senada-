@@ -7,16 +7,26 @@ import { CityData, MapSyncConfig } from '../types';
 import { fetchSheetData, extractSpreadsheetId, parseCSV, parseNumericValue } from '../utils/sheetParser';
 import { DEFAULT_CITIES, SAMPLE_SHEETS_CSV } from '../data/defaultData';
 import { INDONESIAN_CITIES_COORDINATES, findCityCoordinates, getIslandForCity } from '../data/indonesiaCoordinates';
+import { saveMapDataToCloud, saveAppSettingsToCloud } from '../lib/firebase';
 
 interface IndonesiaMapProps {
   onCitiesDataChange: (cities: CityData[]) => void;
   currentCities: CityData[];
   isAdmin?: boolean;
   onRequestAdminLogin?: () => void;
+  volumeThresholds?: { rendahMax: number; sedangMax: number; tinggiMax: number };
+  onVolumeThresholdsChange?: (thresholds: { rendahMax: number; sedangMax: number; tinggiMax: number }) => void;
 }
 
 
-export default function IndonesiaMap({ onCitiesDataChange, currentCities, isAdmin = false, onRequestAdminLogin }: IndonesiaMapProps) {
+export default function IndonesiaMap({ 
+  onCitiesDataChange, 
+  currentCities, 
+  isAdmin = false, 
+  onRequestAdminLogin,
+  volumeThresholds: propVolumeThresholds,
+  onVolumeThresholdsChange
+}: IndonesiaMapProps) {
   const [syncConfig, setSyncConfig] = useState<MapSyncConfig>({
     sheetUrl: '',
     sheetId: '',
@@ -46,11 +56,21 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities, isAdmi
   const [showHelp, setShowHelp] = useState(false);
 
   // Volume indicator thresholds state (< 500 rendah, 501 - 2500 sedang, 2501 - 5000 tinggi, > 5000 sangat tinggi)
-  const [volumeThresholds, setVolumeThresholds] = useState({
-    rendahMax: 500,
-    sedangMax: 2500,
-    tinggiMax: 5000,
+  const [volumeThresholds, setVolumeThresholds] = useState(() => {
+    return propVolumeThresholds || {
+      rendahMax: 500,
+      sedangMax: 2500,
+      tinggiMax: 5000,
+    };
   });
+
+  useEffect(() => {
+    if (propVolumeThresholds) {
+      setVolumeThresholds(propVolumeThresholds);
+      setTempThresholds(propVolumeThresholds);
+    }
+  }, [propVolumeThresholds]);
+
   const [isIndicatorModalOpen, setIsIndicatorModalOpen] = useState(false);
   const [tempThresholds, setTempThresholds] = useState({
     rendahMax: 500,
@@ -467,7 +487,9 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities, isAdmi
       } catch (e) {
         console.error('Failed to save synced default cities', e);
       }
-      setSyncConfig(prev => ({ ...prev, ...cfg, isSynced: true, lastSyncedAt: new Date().toLocaleTimeString() }));
+      const updatedSyncCfg = { ...syncConfig, ...cfg, isSynced: true, lastSyncedAt: new Date().toLocaleTimeString() };
+      setSyncConfig(updatedSyncCfg);
+      saveMapDataToCloud(syncedCities, updatedSyncCfg);
       if (syncedCities[0]) {
         setSelectedCityId(syncedCities[0].id);
       }
@@ -770,7 +792,7 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities, isAdmi
     } catch (e) {}
 
     onCitiesDataChange(DEFAULT_CITIES);
-    setSyncConfig({
+    const resetCfg = {
       sheetUrl: '',
       sheetId: '',
       cityColumn: '',
@@ -779,7 +801,9 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities, isAdmi
       pengaduanColumn: '',
       slaColumn: '',
       isSynced: false,
-    });
+    };
+    setSyncConfig(resetCfg);
+    saveMapDataToCloud(DEFAULT_CITIES, resetCfg);
     setSheetRawRows([]);
     setAvailableColumns([]);
     setSelectedCityId('1'); // Reset to Jakarta
@@ -1990,6 +2014,8 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities, isAdmi
                   type="button"
                   onClick={() => {
                     setVolumeThresholds(tempThresholds);
+                    onVolumeThresholdsChange?.(tempThresholds);
+                    saveAppSettingsToCloud({ volumeThresholds: tempThresholds });
                     setIsIndicatorModalOpen(false);
                   }}
                   className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-extrabold text-xs transition-colors shadow-sm cursor-pointer flex items-center gap-1.5"

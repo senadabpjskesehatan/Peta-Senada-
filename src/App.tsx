@@ -32,6 +32,14 @@ import {
 import { CityData, Ticket, MonthlyPerformance, DynamicChart } from './types';
 import { DEFAULT_CITIES, DEFAULT_TICKETS, MONTHLY_PERFORMANCE, DEFAULT_CHARTS, SAMPLE_SHEETS_CSV, findCityCoordinates } from './data/defaultData';
 import { parseNumericValue, fetchSheetData, parseCSV } from './utils/sheetParser';
+import {
+  subscribeToAppSettings,
+  subscribeToMapData,
+  subscribeToDynamicCharts,
+  saveAppSettingsToCloud,
+  saveMapDataToCloud,
+  saveDynamicChartsToCloud,
+} from './lib/firebase';
 
 // Component Imports
 import IndonesiaMap from './components/IndonesiaMap';
@@ -109,6 +117,12 @@ export default function App() {
   const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts'>('map');
   const [showCopyNotification, setShowCopyNotification] = useState(false);
   const [showCopyDialog, setShowCopyDialog] = useState<string | null>(null);
+  const [isCloudConnected, setIsCloudConnected] = useState(false);
+  const [volumeThresholds, setVolumeThresholds] = useState({
+    rendahMax: 500,
+    sedangMax: 2500,
+    tinggiMax: 5000,
+  });
 
   // Authentication & Guest / Admin Mode state (Default: Guest / Mode Tamu unless previously logged in as admin)
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
@@ -129,6 +143,77 @@ export default function App() {
     setSyncStatusToast('Beralih ke Mode Tamu (View Only)');
     setTimeout(() => setSyncStatusToast(null), 3000);
   };
+
+  // Real-time Firestore Subscriptions for Multi-Device and Guest Synchronization
+  useEffect(() => {
+    // 1. Subscribe to Map Data from Cloud Firestore
+    const unsubMap = subscribeToMapData((cloudMap) => {
+      if (cloudMap) {
+        setIsCloudConnected(true);
+        if (cloudMap.cities && Array.isArray(cloudMap.cities) && cloudMap.cities.length > 0) {
+          const mapped = cloudMap.cities.map(c => {
+            const resolved = findCityCoordinates(c.name);
+            return {
+              ...c,
+              latitude: resolved ? resolved.lat : (c.latitude || -6.2088),
+              longitude: resolved ? resolved.lon : (c.longitude || 106.8456)
+            };
+          });
+          setCitiesData(mapped);
+          try {
+            localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mapped));
+            localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mapped));
+          } catch (e) {}
+        }
+      }
+    });
+
+    // 2. Subscribe to Dynamic Custom Charts from Cloud Firestore
+    const unsubCharts = subscribeToDynamicCharts((cloudCharts) => {
+      if (cloudCharts && Array.isArray(cloudCharts) && cloudCharts.length > 0) {
+        setIsCloudConnected(true);
+        const mapped = cloudCharts.map(ch => ({
+          ...ch,
+          source: ch.source || 'default',
+          xAxisColumns: ch.xAxisColumns || (ch.xAxisColumn ? [ch.xAxisColumn] : ['name']),
+          xAxisColumn: ch.xAxisColumn || 'name',
+          yAxisColumns: ch.yAxisColumns && ch.yAxisColumns.length > 0 ? ch.yAxisColumns : ['informasi', 'permintaan', 'pengaduan'],
+          pieColumns: ch.pieColumns && ch.pieColumns.length > 0 ? ch.pieColumns : ['informasi', 'permintaan', 'pengaduan'],
+          isSynced: true
+        }));
+        setDynamicCharts(mapped);
+        try {
+          localStorage.setItem(CHARTS_STORAGE_KEY, JSON.stringify(mapped));
+        } catch (e) {}
+      }
+    });
+
+    // 3. Subscribe to Global App Settings from Cloud Firestore
+    const unsubSettings = subscribeToAppSettings((cloudSettings) => {
+      if (cloudSettings) {
+        setIsCloudConnected(true);
+        if (cloudSettings.navOrder && Array.isArray(cloudSettings.navOrder)) {
+          const filtered = cloudSettings.navOrder.filter((k: string) => k !== 'analytics' && k !== 'tickets');
+          if (filtered.length > 0) setNavOrder(filtered);
+        }
+        if (cloudSettings.syncInterval) {
+          setSyncInterval(cloudSettings.syncInterval as any);
+        }
+        if (cloudSettings.lastSyncedAt) {
+          setLastSyncedAt(cloudSettings.lastSyncedAt);
+        }
+        if (cloudSettings.volumeThresholds && (cloudSettings.volumeThresholds as any).rendahMax) {
+          setVolumeThresholds(cloudSettings.volumeThresholds as any);
+        }
+      }
+    });
+
+    return () => {
+      unsubMap();
+      unsubCharts();
+      unsubSettings();
+    };
+  }, []);
 
   // Save cities data to localStorage whenever updated
   useEffect(() => {
@@ -178,6 +263,7 @@ export default function App() {
   // Handler to modify/update cities from map component (Google Sheets mapping)
   const handleCitiesDataChange = (updatedCities: CityData[]) => {
     setCitiesData(updatedCities);
+    saveMapDataToCloud(updatedCities);
   };
 
   // Add a new dynamic custom chart
@@ -196,20 +282,24 @@ export default function App() {
       pieColumns: ['informasi', 'permintaan', 'pengaduan'],
       isSynced: true,
     };
-    setDynamicCharts([...dynamicCharts, newChart]);
+    const updatedCharts = [...dynamicCharts, newChart];
+    setDynamicCharts(updatedCharts);
+    saveDynamicChartsToCloud(updatedCharts);
     setActiveMainTab('custom-charts');
   };
 
   // Update specific custom chart
   const handleUpdateChart = (chartId: string, updatedFields: Partial<DynamicChart>) => {
-    setDynamicCharts(
-      dynamicCharts.map(c => (c.id === chartId ? { ...c, ...updatedFields } : c))
-    );
+    const updatedCharts = dynamicCharts.map(c => (c.id === chartId ? { ...c, ...updatedFields } : c));
+    setDynamicCharts(updatedCharts);
+    saveDynamicChartsToCloud(updatedCharts);
   };
 
   // Delete custom chart
   const handleDeleteChart = (chartId: string) => {
-    setDynamicCharts(dynamicCharts.filter(c => c.id !== chartId));
+    const updatedCharts = dynamicCharts.filter(c => c.id !== chartId);
+    setDynamicCharts(updatedCharts);
+    saveDynamicChartsToCloud(updatedCharts);
   };
 
   // Navigation order state for moveable/draggable nav items (Analytics menu is hidden)
@@ -240,6 +330,7 @@ export default function App() {
     newOrder[index] = newOrder[targetIndex];
     newOrder[targetIndex] = temp;
     setNavOrder(newOrder);
+    saveAppSettingsToCloud({ navOrder: newOrder });
   };
 
   // Google Sheet Auto-Sync & Interval States
@@ -258,6 +349,9 @@ export default function App() {
   // Persist sync interval & URL options
   useEffect(() => {
     localStorage.setItem('google_sheet_sync_interval', syncInterval);
+    if (isAdmin) {
+      saveAppSettingsToCloud({ syncInterval });
+    }
   }, [syncInterval]);
 
   useEffect(() => {
@@ -310,6 +404,7 @@ export default function App() {
             setCitiesData(mappedCities);
             localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mappedCities));
             localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mappedCities));
+            saveMapDataToCloud(mappedCities);
           }
         }
       } else {
@@ -342,6 +437,7 @@ export default function App() {
           setCitiesData(mappedCities);
           localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mappedCities));
           localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mappedCities));
+          saveMapDataToCloud(mappedCities);
         }
       }
 
@@ -365,6 +461,7 @@ export default function App() {
       const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB';
       setLastSyncedAt(nowStr);
       localStorage.setItem('google_sheet_last_synced', nowStr);
+      saveAppSettingsToCloud({ lastSyncedAt: nowStr });
       setSyncStatusToast(`Sukses sinkronisasi (${nowStr})`);
       setTimeout(() => setSyncStatusToast(null), 3500);
     } catch (err: any) {
@@ -546,9 +643,13 @@ export default function App() {
               </span>
             )}
 
-            <div className="bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-emerald-200 flex items-center shrink-0 shadow-3xs" title="Data hasil upload/sync tersimpan di database browser dan akan selalu muncul saat link di-share">
+            <div className="bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-emerald-200 flex items-center shrink-0 shadow-3xs" title="Cloud Database Firestore terhubung secara live. Data & setting admin tersimpan dan tersinkronisasi di semua perangkat, jaringan & mode tamu.">
               <Database className="w-3.5 h-3.5 text-emerald-600 mr-1.5 shrink-0" />
-              <span>Database Sync Active</span>
+              <span className="flex items-center gap-1.5">
+                <span>Cloud Firestore</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span className="text-[10px] text-emerald-600 font-medium hidden lg:inline">Live Multi-Device</span>
+              </span>
             </div>
 
             <button
@@ -687,6 +788,11 @@ export default function App() {
                   currentCities={citiesData}
                   isAdmin={isAdmin}
                   onRequestAdminLogin={() => setIsLoginModalOpen(true)}
+                  volumeThresholds={volumeThresholds}
+                  onVolumeThresholdsChange={(t) => {
+                    setVolumeThresholds(t);
+                    saveAppSettingsToCloud({ volumeThresholds: t });
+                  }}
                 />
               </div>
             )}

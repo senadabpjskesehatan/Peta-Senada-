@@ -1,3 +1,57 @@
+export function parseNumericValue(val: any): number {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  
+  let str = String(val).trim();
+  if (!str) return 0;
+
+  // Remove currency symbols (Rp, $, etc.), non-breaking spaces (\u00A0), and extra whitespace
+  str = str.replace(/[Rp$\s\u00A0]/gi, '');
+
+  if (/^-?\d+$/.test(str)) {
+    return parseInt(str, 10);
+  }
+
+  // Handle formatted number strings
+  // 1. Multiple dots (e.g., "1.041.788") -> thousand separators
+  if ((str.match(/\./g) || []).length > 1) {
+    str = str.replace(/\./g, '');
+  }
+  // 2. Multiple commas (e.g., "1,041,788") -> thousand separators
+  if ((str.match(/,/g) || []).length > 1) {
+    str = str.replace(/,/g, '');
+  }
+
+  // 3. Both dot and comma: "1.041.788,00" or "1,041,788.00"
+  if (str.includes('.') && str.includes(',')) {
+    if (str.lastIndexOf('.') < str.lastIndexOf(',')) {
+      // Indonesian format: 1.041.788,00 -> dot is thousand, comma is decimal
+      str = str.replace(/\./g, '').replace(',', '.');
+    } else {
+      // US format: 1,041,788.00 -> comma is thousand, dot is decimal
+      str = str.replace(/,/g, '');
+    }
+  } else if (str.includes('.')) {
+    // Single dot, e.g., "1.041" or "1041.788" or "1041.5"
+    const parts = str.split('.');
+    if (parts.length === 2 && parts[1].length === 3 && parts[0].length >= 1) {
+      str = str.replace('.', '');
+    }
+  } else if (str.includes(',')) {
+    // Single comma, e.g., "1,041" or "1041,788" or "1041,5"
+    const parts = str.split(',');
+    if (parts.length === 2 && parts[1].length === 3 && parts[0].length >= 1) {
+      str = str.replace(',', '');
+    } else {
+      str = str.replace(',', '.');
+    }
+  }
+
+  const cleaned = str.replace(/[^0-9.-]/g, '');
+  const parsed = parseFloat(cleaned);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
 export function extractSpreadsheetId(url: string): { spreadsheetId: string | null; gid: string | null } {
   if (!url) return { spreadsheetId: null, gid: null };
   
@@ -35,38 +89,101 @@ export function parseCSVLine(line: string): string[] {
 }
 
 export function parseCSV(csvText: string): any[] {
-  const lines = csvText.split(/\r?\n/);
-  if (lines.length === 0 || !lines[0]) return [];
+  if (!csvText || !csvText.trim()) return [];
   
-  // Clean headers (remove whitespace and special characters or empty values)
-  const rawHeaders = parseCSVLine(lines[0]);
-  const headers = rawHeaders.map((h, idx) => h.trim() || `column_${idx + 1}`);
-  
-  const result: any[] = [];
-  
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const values = parseCSVLine(line);
-    
-    const obj: any = {};
-    headers.forEach((header, index) => {
-      let val = values[index] !== undefined ? values[index] : '';
-      val = val.trim();
-      
-      // Auto-parse numbers (remove commas or spaces if formatting number)
-      const cleanNumStr = val.replace(/[\$,]/g, '');
-      if (val !== '' && !isNaN(Number(cleanNumStr))) {
-        obj[header] = Number(cleanNumStr);
+  // Full RFC 4180 CSV parser supporting unlimited rows, columns, and multi-line quotes
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentCell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i++) {
+    const char = csvText[i];
+    const nextChar = csvText[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        currentCell += '"';
+        i++; // skip escaped quote
       } else {
-        // Handle boolean
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      currentRow.push(currentCell.trim());
+      currentCell = '';
+    } else if ((char === '\r' || char === '\n') && !inQuotes) {
+      if (char === '\r' && nextChar === '\n') {
+        i++;
+      }
+      currentRow.push(currentCell.trim());
+      // Keep row if it has any content
+      if (currentRow.some(cell => cell.length > 0)) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+      currentCell = '';
+    } else {
+      currentCell += char;
+    }
+  }
+
+  if (currentCell.length > 0 || currentRow.length > 0) {
+    currentRow.push(currentCell.trim());
+    if (currentRow.some(cell => cell.length > 0)) {
+      rows.push(currentRow);
+    }
+  }
+
+  if (rows.length === 0) return [];
+
+  // Deduplicate and sanitize headers for all columns without limits
+  const headerCounts: Record<string, number> = {};
+  const rawHeaders = rows[0];
+  const maxCols = Math.max(...rows.map(r => r.length));
+
+  const headers: string[] = [];
+  for (let c = 0; c < maxCols; c++) {
+    let raw = (rawHeaders[c] || '').replace(/^"|"$/g, '').replace(/""/g, '"').trim();
+    if (!raw) raw = `Kolom_${c + 1}`;
+
+    if (headerCounts[raw] !== undefined) {
+      headerCounts[raw]++;
+      headers.push(`${raw}_${headerCounts[raw]}`);
+    } else {
+      headerCounts[raw] = 0;
+      headers.push(raw);
+    }
+  }
+
+  const result: any[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const rowValues = rows[r];
+    const obj: any = {};
+    let hasData = false;
+
+    headers.forEach((header, colIdx) => {
+      let val = rowValues[colIdx] !== undefined ? rowValues[colIdx] : '';
+      val = val.replace(/^"|"$/g, '').replace(/""/g, '"').trim();
+
+      if (val !== '') hasData = true;
+
+      const parsedNum = parseNumericValue(val);
+      if (val !== '' && !isNaN(Number(val))) {
+        obj[header] = Number(val);
+      } else if (val !== '' && typeof val === 'string' && /^-?[\d.,\s\u00A0Rp$]+$/.test(val) && !isNaN(parsedNum)) {
+        obj[header] = parsedNum;
+      } else {
         if (val.toLowerCase() === 'true') obj[header] = true;
         else if (val.toLowerCase() === 'false') obj[header] = false;
         else obj[header] = val;
       }
     });
-    result.push(obj);
+
+    if (hasData) {
+      result.push(obj);
+    }
   }
+
   return result;
 }
 

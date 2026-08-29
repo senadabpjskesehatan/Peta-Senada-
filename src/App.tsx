@@ -17,11 +17,14 @@ import {
   FileText,
   Info,
   Database,
-  Share2
+  Share2,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 
 import { CityData, Ticket, MonthlyPerformance, DynamicChart } from './types';
-import { DEFAULT_CITIES, DEFAULT_TICKETS, MONTHLY_PERFORMANCE, DEFAULT_CHARTS } from './data/defaultData';
+import { DEFAULT_CITIES, DEFAULT_TICKETS, MONTHLY_PERFORMANCE, DEFAULT_CHARTS, SAMPLE_SHEETS_CSV, findCityCoordinates } from './data/defaultData';
+import { parseNumericValue, fetchSheetData, parseCSV } from './utils/sheetParser';
 
 // Component Imports
 import IndonesiaMap from './components/IndonesiaMap';
@@ -64,13 +67,13 @@ export default function App() {
 
   // Global aggregate metrics computed on the fly from current Excel / Sheet cities data
   const summaryMetrics = useMemo(() => {
-    const totalInformasi = citiesData.reduce((acc, c) => acc + (Number(c.informasi) || 0), 0);
-    const totalPermintaan = citiesData.reduce((acc, c) => acc + (Number(c.permintaan) || 0), 0);
-    const totalPengaduan = citiesData.reduce((acc, c) => acc + (Number(c.pengaduan) || 0), 0);
+    const totalInformasi = citiesData.reduce((acc, c) => acc + parseNumericValue(c.informasi), 0);
+    const totalPermintaan = citiesData.reduce((acc, c) => acc + parseNumericValue(c.permintaan), 0);
+    const totalPengaduan = citiesData.reduce((acc, c) => acc + parseNumericValue(c.pengaduan), 0);
     
     // Total tiket is the sum of total in all mapped cities
     const totalTiket = citiesData.reduce((acc, c) => {
-      const cityTotal = Number(c.total) > 0 ? Number(c.total) : (Number(c.informasi) + Number(c.permintaan) + Number(c.pengaduan));
+      const cityTotal = parseNumericValue(c.total) > 0 ? parseNumericValue(c.total) : (parseNumericValue(c.informasi) + parseNumericValue(c.permintaan) + parseNumericValue(c.pengaduan));
       return acc + cityTotal;
     }, 0);
 
@@ -124,13 +127,127 @@ export default function App() {
     setDynamicCharts(dynamicCharts.filter(c => c.id !== chartId));
   };
 
-  // Simulate refreshing data (simulates real-time synchronization)
+  // Navigation order state for moveable/draggable nav items
+  const [navOrder, setNavOrder] = useState<string[]>(() => {
+    const saved = localStorage.getItem('sidebar_nav_order');
+    return saved ? JSON.parse(saved) : ['map', 'analytics', 'custom-charts'];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('sidebar_nav_order', JSON.stringify(navOrder));
+  }, [navOrder]);
+
+  const moveNavItem = (index: number, direction: 'up' | 'down') => {
+    const newOrder = [...navOrder];
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= newOrder.length) return;
+    const temp = newOrder[index];
+    newOrder[index] = newOrder[targetIndex];
+    newOrder[targetIndex] = temp;
+    setNavOrder(newOrder);
+  };
+
+  // Google Sheet Auto-Sync & Interval States
+  const [syncInterval, setSyncInterval] = useState<'manual' | '15m' | '30m' | '1h' | '1d'>(() => {
+    return (localStorage.getItem('google_sheet_sync_interval') as any) || 'manual';
+  });
+  const [googleSheetUrl, setGoogleSheetUrl] = useState<string>(() => {
+    return localStorage.getItem('google_sheet_sync_url') || '';
+  });
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(() => {
+    return localStorage.getItem('google_sheet_last_synced') || null;
+  });
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const handleSimulateIncomingFeed = () => {
+  const [syncStatusToast, setSyncStatusToast] = useState<string | null>(null);
+
+  // Persist sync interval & URL options
+  useEffect(() => {
+    localStorage.setItem('google_sheet_sync_interval', syncInterval);
+  }, [syncInterval]);
+
+  useEffect(() => {
+    if (googleSheetUrl) {
+      localStorage.setItem('google_sheet_sync_url', googleSheetUrl);
+    }
+  }, [googleSheetUrl]);
+
+  // Core Sync Execution Engine for Google Sheet & Feed
+  const handleExecuteSync = async (overrideUrl?: string) => {
+    const storedUrl = localStorage.getItem('google_sheet_sync_url') || '';
+    const targetUrl = overrideUrl !== undefined ? overrideUrl : (googleSheetUrl || storedUrl);
     setIsRefreshing(true);
-    setTimeout(() => {
-      // Simulate adding 1 random elapsed day to non-completed tickets
-      const updatedTickets = ticketsData.map(t => {
+
+    try {
+      if (targetUrl && targetUrl.trim()) {
+        const { data, columns } = await fetchSheetData(targetUrl);
+        if (data && data.length > 0) {
+          const matchedKC = columns.find(c => /kc|kantor.*cabang|cabang|kota|city|daerah|wilayah|lokasi|kabupaten|nama/i.test(c)) || columns[0] || '';
+          const matchedInfo = columns.find(c => /info|layanan.*info|informasi/i.test(c)) || '';
+          const matchedPermintaan = columns.find(c => /minta|layanan.*minta|permintaan|tindakan/i.test(c)) || '';
+          const matchedPengaduan = columns.find(c => /aduan|layanan.*aduan|pengaduan|komplain/i.test(c)) || '';
+          const matchedSla = columns.find(c => /sla|compliance|kepatuhan|persen|percent/i.test(c)) || '';
+
+          const mappedCities: CityData[] = data.map((row, idx) => {
+            const rawName = String(row[matchedKC] || `KC_${idx + 1}`).trim();
+            const infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
+            const permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
+            const pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
+            const slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
+
+            const existingCity = citiesData.find(c => c.name.toLowerCase() === rawName.toLowerCase());
+            const coords = existingCity ? { lat: existingCity.latitude, lon: existingCity.longitude } : findCityCoordinates(rawName);
+
+            return {
+              id: existingCity?.id || `city_${idx}_${Date.now()}`,
+              name: rawName,
+              latitude: coords.lat,
+              longitude: coords.lon,
+              informasi: infoVal,
+              permintaan: permVal,
+              pengaduan: pengVal,
+              total: infoVal + permVal + pengVal,
+              avgSlaDays: existingCity?.avgSlaDays || 2.5,
+              slaCompliance: slaVal
+            };
+          });
+
+          if (mappedCities.length > 0) {
+            setCitiesData(mappedCities);
+          }
+        }
+      } else {
+        // Fallback to sample spreadsheet acuan data so numbers update strictly from Google Sheet source acuan
+        const sampleRaw = parseCSV(SAMPLE_SHEETS_CSV.map);
+        if (sampleRaw && sampleRaw.length > 0) {
+          const mappedCities: CityData[] = sampleRaw.map((row, idx) => {
+            const rawName = String(row['Kota'] || row['KC'] || `KC_${idx + 1}`).trim();
+            const infoVal = parseNumericValue(row['Layanan_Informasi'] || row['Layanan Informasi']);
+            const permVal = parseNumericValue(row['Layanan_Permintaan'] || row['Permintaan Tindakan']);
+            const pengVal = parseNumericValue(row['Layanan_Pengaduan'] || row['Pengaduan Layanan']);
+            const slaVal = parseNumericValue(row['Kepatuhan_SLA'] || row['Kepatuhan SLA']) || 90;
+
+            const existingCity = citiesData.find(c => c.name.toLowerCase() === rawName.toLowerCase());
+            const coords = existingCity ? { lat: existingCity.latitude, lon: existingCity.longitude } : findCityCoordinates(rawName);
+
+            return {
+              id: existingCity?.id || `city_${idx}_${Date.now()}`,
+              name: rawName,
+              latitude: coords.lat,
+              longitude: coords.lon,
+              informasi: infoVal,
+              permintaan: permVal,
+              pengaduan: pengVal,
+              total: infoVal + permVal + pengVal,
+              avgSlaDays: existingCity?.avgSlaDays || 2.5,
+              slaCompliance: slaVal
+            };
+          });
+          setCitiesData(mappedCities);
+        }
+      }
+
+      // Update active ticket SLA states
+      setTicketsData(prev => prev.map(t => {
         if (t.status === 'Selesai') return t;
         const newElapsed = t.elapsedDays + 1;
         let newSlaStatus = t.slaStatus;
@@ -144,27 +261,40 @@ export default function App() {
           elapsedDays: newElapsed,
           slaStatus: newSlaStatus
         };
-      });
-      setTicketsData(updatedTickets);
+      }));
 
-      // Add small variance to cities
-      const updatedCities = citiesData.map(c => {
-        const randInfo = Math.floor(Math.random() * 3);
-        const randMinta = Math.floor(Math.random() * 2);
-        const randAdu = Math.floor(Math.random() * 2);
-        return {
-          ...c,
-          informasi: c.informasi + randInfo,
-          permintaan: c.permintaan + randMinta,
-          pengaduan: c.pengaduan + randAdu,
-          total: c.total + randInfo + randMinta + randAdu
-        };
-      });
-      setCitiesData(updatedCities);
-
+      const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB';
+      setLastSyncedAt(nowStr);
+      localStorage.setItem('google_sheet_last_synced', nowStr);
+      setSyncStatusToast(`Sukses sinkronisasi (${nowStr})`);
+      setTimeout(() => setSyncStatusToast(null), 3500);
+    } catch (err: any) {
+      console.error('Sheet Sync Error:', err);
+      setSyncStatusToast(`Gagal sync: ${err.message || 'Error koneksi Google Sheet'}`);
+      setTimeout(() => setSyncStatusToast(null), 4000);
+    } finally {
       setIsRefreshing(false);
-    }, 800);
+    }
   };
+
+  // Auto-Sync Timer Effect
+  useEffect(() => {
+    if (syncInterval === 'manual') return;
+
+    let intervalMs = 0;
+    if (syncInterval === '15m') intervalMs = 15 * 60 * 1000;
+    else if (syncInterval === '30m') intervalMs = 30 * 60 * 1000;
+    else if (syncInterval === '1h') intervalMs = 60 * 60 * 1000;
+    else if (syncInterval === '1d') intervalMs = 24 * 60 * 60 * 1000;
+
+    if (intervalMs <= 0) return;
+
+    const intervalId = setInterval(() => {
+      handleExecuteSync();
+    }, intervalMs);
+
+    return () => clearInterval(intervalId);
+  }, [syncInterval, googleSheetUrl]);
 
   // Helper list of city names for adding tickets form
   const cityNames = useMemo(() => {
@@ -192,38 +322,55 @@ export default function App() {
         </div>
         
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <button
-            onClick={() => setActiveMainTab('map')}
-            className={`w-full p-3 rounded-lg flex items-center space-x-3 cursor-pointer text-left transition-colors ${
-              activeMainTab === 'map' ? 'bg-blue-600/20 text-blue-400 font-medium' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-            }`}
-            id="tab-map-button"
-          >
-            <div className={`w-2 h-2 rounded-full ${activeMainTab === 'map' ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
-            <span className="text-sm font-medium">Pemetaan Geo</span>
-          </button>
+          {navOrder.map((tabKey, idx) => {
+            const isMap = tabKey === 'map';
+            const isAnalytics = tabKey === 'analytics';
+            const isActive = activeMainTab === tabKey;
+            const label = isMap ? 'Pemetaan Geo' : isAnalytics ? 'Analitik Performa' : `Konfigurasi Chart (${dynamicCharts.length})`;
 
-          <button
-            onClick={() => setActiveMainTab('analytics')}
-            className={`w-full p-3 rounded-lg flex items-center space-x-3 cursor-pointer text-left transition-colors ${
-              activeMainTab === 'analytics' ? 'bg-blue-600/20 text-blue-400 font-medium' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-            }`}
-            id="tab-analytics-button"
-          >
-            <div className={`w-2 h-2 rounded-full ${activeMainTab === 'analytics' ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
-            <span className="text-sm font-medium">Analitik Performa</span>
-          </button>
+            return (
+              <div
+                key={tabKey}
+                className={`group relative w-full p-2.5 rounded-lg flex items-center justify-between transition-colors ${
+                  isActive ? 'bg-blue-600/20 text-blue-400 font-medium' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                }`}
+                id={`tab-${tabKey}-button`}
+              >
+                <button
+                  onClick={() => setActiveMainTab(tabKey as any)}
+                  className="flex items-center space-x-3 text-left flex-1 cursor-pointer py-0.5"
+                >
+                  <div className={`w-2 h-2 rounded-full ${isActive ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
+                  <span className="text-sm font-medium">{label}</span>
+                </button>
 
-          <button
-            onClick={() => setActiveMainTab('custom-charts')}
-            className={`w-full p-3 rounded-lg flex items-center space-x-3 cursor-pointer text-left transition-colors ${
-              activeMainTab === 'custom-charts' ? 'bg-blue-600/20 text-blue-400 font-medium' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-            }`}
-            id="tab-custom-charts-button"
-          >
-            <div className={`w-2 h-2 rounded-full ${activeMainTab === 'custom-charts' ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
-            <span className="text-sm font-medium">Konfigurasi Chart ({dynamicCharts.length})</span>
-          </button>
+                <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-0.5 transition-opacity">
+                  <button
+                    title="Geser ke atas"
+                    disabled={idx === 0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      moveNavItem(idx, 'up');
+                    }}
+                    className={`p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white ${idx === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                  >
+                    <ChevronUp className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    title="Geser ke bawah"
+                    disabled={idx === navOrder.length - 1}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      moveNavItem(idx, 'down');
+                    }}
+                    className={`p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white ${idx === navOrder.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </nav>
 
         <div className="p-4 border-t border-slate-800">
@@ -252,8 +399,14 @@ export default function App() {
             <span className="hidden sm:inline-block text-xs text-slate-400">WIB / WITA / WIT</span>
           </div>
           
-          <div className="flex items-center space-x-3">
-            <div className="bg-emerald-50 text-emerald-800 px-3 py-1 rounded-full text-xs font-bold border border-emerald-200 flex items-center shrink-0 shadow-3xs" title="Data hasil upload/sync tersimpan di database browser dan akan selalu muncul saat link di-share">
+          <div className="flex items-center space-x-2.5">
+            {syncStatusToast && (
+              <span className="text-[11px] bg-slate-800 text-white px-3 py-1 rounded-xl shadow-sm font-medium animate-fade-in hidden xl:inline-block">
+                {syncStatusToast}
+              </span>
+            )}
+
+            <div className="bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-emerald-200 flex items-center shrink-0 shadow-3xs" title="Data hasil upload/sync tersimpan di database browser dan akan selalu muncul saat link di-share">
               <Database className="w-3.5 h-3.5 text-emerald-600 mr-1.5 shrink-0" />
               <span>Database Sync Active</span>
             </div>
@@ -272,15 +425,38 @@ export default function App() {
               <span>{showCopyNotification ? 'Link Tersalin!' : 'Bagikan Link'}</span>
             </button>
 
-            <button
-              onClick={handleSimulateIncomingFeed}
-              disabled={isRefreshing}
-              className="bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-50 cursor-pointer shadow-3xs"
-              id="simulate-data-refresh-button"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin text-blue-600' : 'text-slate-500'}`} />
-              {isRefreshing ? 'Sinkronisasi...' : 'Refresh Umpan'}
-            </button>
+            {/* AUTO SYNC GOOGLE SHEET CONTROL GROUP */}
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 p-1 rounded-xl shadow-3xs">
+              <div className="flex items-center gap-1 pl-1.5 pr-0.5">
+                <Clock className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                <span className="text-[11px] text-slate-500 font-bold hidden md:inline">Auto Sync:</span>
+                <select
+                  value={syncInterval}
+                  onChange={(e) => setSyncInterval(e.target.value as any)}
+                  className="bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-3xs"
+                  id="auto-sync-interval-select"
+                  title="Pilih Waktu Auto Sync dengan Google Sheet"
+                >
+                  <option value="manual">Sync Manual</option>
+                  <option value="15m">15 Menit</option>
+                  <option value="30m">30 Menit</option>
+                  <option value="1h">1 Jam</option>
+                  <option value="1d">1 Hari</option>
+                </select>
+              </div>
+
+              {/* TARGETED BUTTON ID */}
+              <button
+                onClick={() => handleExecuteSync()}
+                disabled={isRefreshing}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-50 cursor-pointer shadow-3xs"
+                id="simulate-data-refresh-button"
+                title={lastSyncedAt ? `Terakhir sinkronisasi: ${lastSyncedAt}` : 'Klik untuk Sinkronisasi Manual Google Sheet'}
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                <span>{isRefreshing ? 'Sinkronisasi...' : 'Sync Sekarang'}</span>
+              </button>
+            </div>
           </div>
         </header>
 
@@ -298,8 +474,8 @@ export default function App() {
               <div className="flex-1 min-w-0">
                 <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Total Tiket</span>
                 <div className="flex items-baseline justify-between mt-0.5">
-                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalTiket.toLocaleString()}</h4>
-                  <span className="text-blue-700 text-xs font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-100">100%</span>
+                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalTiket.toLocaleString('id-ID')}</h4>
+                  <span className="text-blue-700 text-sm font-extrabold bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 shadow-3xs">100%</span>
                 </div>
               </div>
             </div>
@@ -312,8 +488,8 @@ export default function App() {
               <div className="flex-1 min-w-0">
                 <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Informasi</span>
                 <div className="flex items-baseline justify-between mt-0.5">
-                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalInformasi.toLocaleString()}</h4>
-                  <span className="text-sky-700 text-xs font-bold bg-sky-50 px-2 py-0.5 rounded border border-sky-100">{summaryMetrics.pctInformasi}%</span>
+                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalInformasi.toLocaleString('id-ID')}</h4>
+                  <span className="text-sky-700 text-sm font-extrabold bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200 shadow-3xs">{summaryMetrics.pctInformasi}%</span>
                 </div>
               </div>
             </div>
@@ -326,8 +502,8 @@ export default function App() {
               <div className="flex-1 min-w-0">
                 <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Permintaan</span>
                 <div className="flex items-baseline justify-between mt-0.5">
-                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPermintaan.toLocaleString()}</h4>
-                  <span className="text-amber-700 text-xs font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-100">{summaryMetrics.pctPermintaan}%</span>
+                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPermintaan.toLocaleString('id-ID')}</h4>
+                  <span className="text-amber-700 text-sm font-extrabold bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 shadow-3xs">{summaryMetrics.pctPermintaan}%</span>
                 </div>
               </div>
             </div>
@@ -340,8 +516,8 @@ export default function App() {
               <div className="flex-1 min-w-0">
                 <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Pengaduan</span>
                 <div className="flex items-baseline justify-between mt-0.5">
-                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPengaduan.toLocaleString()}</h4>
-                  <span className="text-rose-700 text-xs font-bold bg-rose-50 px-2 py-0.5 rounded border border-rose-100">{summaryMetrics.pctPengaduan}%</span>
+                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPengaduan.toLocaleString('id-ID')}</h4>
+                  <span className="text-rose-700 text-sm font-extrabold bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 shadow-3xs">{summaryMetrics.pctPengaduan}%</span>
                 </div>
               </div>
             </div>

@@ -160,14 +160,14 @@ async function startServer() {
 
       const activeGid = typeof gid === "string" && gid ? gid : "0";
 
-      // Attempt 1: gviz/tq endpoint (works reliably for public sheets without redirecting to login)
-      const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&gid=${activeGid}`;
-      // Attempt 2: export?format=csv endpoint
+      // Attempt 1: Direct full export endpoint (returns all rows and columns without any gviz query limits)
       const exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${activeGid}`;
+      // Attempt 2: gviz/tq endpoint with explicit select * for full row/col extraction
+      const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&tq=${encodeURIComponent('select *')}&gid=${activeGid}`;
       // Attempt 3: pub?output=csv endpoint
       const pubUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/pub?output=csv&gid=${activeGid}`;
 
-      const candidateUrls = [gvizUrl, exportUrl, pubUrl];
+      const candidateUrls = [exportUrl, gvizUrl, pubUrl];
       let csvText = "";
       let fetchSuccess = false;
 

@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { Settings, Trash2, Database, FileSpreadsheet, RotateCw, CheckCircle, AlertCircle, BarChart2, TrendingUp, PieChart as PieIcon, Layers } from 'lucide-react';
 import { DynamicChart, CityData, MonthlyPerformance } from '../types';
-import { fetchSheetData } from '../utils/sheetParser';
+import { fetchSheetData, parseNumericValue } from '../utils/sheetParser';
 
 interface DynamicChartItemProps {
   key?: string;
@@ -33,9 +33,9 @@ export default function DynamicChartItem({
     let permintaan = 0;
     let pengaduan = 0;
     localCitiesData.forEach(c => {
-      informasi += c.informasi;
-      permintaan += c.permintaan;
-      pengaduan += c.pengaduan;
+      informasi += parseNumericValue(c.informasi);
+      permintaan += parseNumericValue(c.permintaan);
+      pengaduan += parseNumericValue(c.pengaduan);
     });
     return [
       { layanan: 'Layanan Informasi', total: informasi },
@@ -164,17 +164,27 @@ export default function DynamicChartItem({
       );
     }
 
-    // Prepare data with safeguards
-    const formattedData = activeDataset.map((row, idx) => {
-      const val = row[yKey];
-      return {
-        ...row,
-        // Enforce numeric values for the Y axis
-        [yKey]: typeof val === 'number' ? val : parseFloat(val) || 0,
-        // Make sure X axis isn't empty
-        [xKey]: row[xKey] !== undefined ? String(row[xKey]) : `Item ${idx + 1}`
-      };
+    // Prepare data with safeguards and aggregate duplicate X values (summing Y values) with date in text format
+    const aggregatedMap = new Map<string, any>();
+
+    activeDataset.forEach((row, idx) => {
+      const rawX = row[xKey] !== undefined ? String(row[xKey]).trim() : `Item ${idx + 1}`;
+      const rawY = row[yKey];
+      const numericY = typeof rawY === 'number' ? rawY : parseFloat(String(rawY).replace(/[^0-9.-]/g, '')) || 0;
+
+      if (aggregatedMap.has(rawX)) {
+        const existing = aggregatedMap.get(rawX);
+        existing[yKey] = (existing[yKey] || 0) + numericY;
+      } else {
+        aggregatedMap.set(rawX, {
+          ...row,
+          [xKey]: rawX,
+          [yKey]: numericY
+        });
+      }
     });
+
+    const formattedData = Array.from(aggregatedMap.values());
 
     // Custom Tooltip for dynamic keys
     const CustomDynamicTooltip = ({ active, payload }: any) => {
@@ -263,7 +273,7 @@ export default function DynamicChartItem({
     <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col justify-between hover:border-slate-300 transition-all group" id={`chart-card-${chart.id}`}>
       
       {/* CHART HEADER */}
-      <div className="flex items-center justify-between gap-3 mb-4">
+      <div className="flex items-center justify-between gap-3 mb-3">
         <div className="flex items-center gap-2 flex-1">
           {chart.type === 'line' ? <TrendingUp className="text-indigo-600 h-4.5 w-4.5" /> :
            chart.type === 'bar' ? <BarChart2 className="text-teal-600 h-4.5 w-4.5" /> :
@@ -298,6 +308,49 @@ export default function DynamicChartItem({
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
+      </div>
+
+      {/* QUICK DATASET & GOOGLE SHEET SYNC SELECTOR BAR */}
+      <div className="flex items-center justify-between gap-2 bg-slate-50/90 px-3 py-2 rounded-xl border border-slate-200/85 text-xs mb-3 shadow-3xs">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <Database className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+          <span className="text-[10px] text-slate-500 font-bold shrink-0">Data:</span>
+          <select
+            value={chart.source === 'sheets' ? 'sheets' : chart.xAxisColumn}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val === 'sheets') {
+                onUpdate(chart.id, { source: 'sheets' });
+              } else if (val === 'month') {
+                onUpdate(chart.id, { source: 'default', xAxisColumn: 'month', yAxisColumn: 'informasi' });
+              } else if (val === 'name') {
+                onUpdate(chart.id, { source: 'default', xAxisColumn: 'name', yAxisColumn: 'slaCompliance' });
+              } else if (val === 'layanan') {
+                onUpdate(chart.id, { source: 'default', xAxisColumn: 'layanan', yAxisColumn: 'total' });
+              }
+            }}
+            className="bg-white border border-slate-200 rounded-lg text-[11px] font-bold text-slate-700 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 truncate cursor-pointer shadow-3xs w-full"
+            title="Pilih Sumber Data Grafik"
+          >
+            <option value="month">Data Bulanan Tersinkron</option>
+            <option value="name">Data Kota & Cabang</option>
+            <option value="layanan">Rasio Kategori Layanan</option>
+            <option value="sheets">{chart.isSynced ? `Google Sheet (${chart.syncedData?.length || 0} baris tersinkron)` : 'Google Sheet (Tambah/Sinkron Data Baru)'}</option>
+          </select>
+        </div>
+        
+        <button
+          type="button"
+          onClick={() => {
+            onUpdate(chart.id, { source: 'sheets' });
+            setShowConfig(true);
+          }}
+          className="text-[10px] text-indigo-700 hover:text-indigo-900 font-bold bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg border border-indigo-200 transition-colors shrink-0 flex items-center gap-1 cursor-pointer shadow-3xs"
+          title="Sinkron Kembali atau Tambah Data Baru Google Sheet"
+        >
+          <FileSpreadsheet className="h-3.5 w-3.5 text-indigo-600" />
+          <span>{chart.isSynced ? 'Sinkron Ulang' : 'Sinkron Sheet'}</span>
+        </button>
       </div>
 
       {/* RENDER DYNAMIC CHART AREA */}

@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, PieChart, Pie, Cell } from 'recharts';
 import { Info, HelpCircle, FileText, ArrowUpRight, TrendingUp, Sparkles, Award } from 'lucide-react';
 import { CityData, MonthlyPerformance } from '../types';
+import { parseNumericValue } from '../utils/sheetParser';
 
 interface MonthlyAnalyticsProps {
   citiesData: CityData[];
@@ -18,9 +19,9 @@ export default function MonthlyAnalytics({ citiesData, monthlyData }: MonthlyAna
     let pengaduan = 0;
 
     citiesData.forEach(c => {
-      informasi += c.informasi;
-      permintaan += c.permintaan;
-      pengaduan += c.pengaduan;
+      informasi += parseNumericValue(c.informasi);
+      permintaan += parseNumericValue(c.permintaan);
+      pengaduan += parseNumericValue(c.pengaduan);
     });
 
     const total = informasi + permintaan + pengaduan;

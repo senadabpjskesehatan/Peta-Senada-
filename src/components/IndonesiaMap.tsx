@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { CityData, MapSyncConfig } from '../types';
-import { fetchSheetData, extractSpreadsheetId } from '../utils/sheetParser';
+import { fetchSheetData, extractSpreadsheetId, parseCSV, parseNumericValue } from '../utils/sheetParser';
 import { DEFAULT_CITIES, SAMPLE_SHEETS_CSV } from '../data/defaultData';
 
 interface IndonesiaMapProps {
@@ -189,11 +189,78 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
     return 'Lainnya';
   };
 
-  // Filtered cities list based on search query and selected island
+  // Aggregate and deduplicate KC data by unique Kantor Cabang name using SUM formula
+  const uniqueCities = useMemo(() => {
+    if (!currentCities || currentCities.length === 0) return [];
+
+    const map: Record<string, {
+      id: string;
+      name: string;
+      latitude: number;
+      longitude: number;
+      informasi: number;
+      permintaan: number;
+      pengaduan: number;
+      slaSum: number;
+      count: number;
+    }> = {};
+
+    currentCities.forEach(c => {
+      if (!c.name) return;
+      const cleanKey = c.name.toLowerCase().trim();
+
+      const infoVal = parseNumericValue(c.informasi);
+      const permVal = parseNumericValue(c.permintaan);
+      const pengVal = parseNumericValue(c.pengaduan);
+      const slaVal = parseNumericValue(c.slaCompliance) || 90;
+
+      if (!map[cleanKey]) {
+        map[cleanKey] = {
+          id: c.id,
+          name: c.name,
+          latitude: c.latitude,
+          longitude: c.longitude,
+          informasi: 0,
+          permintaan: 0,
+          pengaduan: 0,
+          slaSum: 0,
+          count: 0,
+        };
+      }
+
+      // Rumus SUM per kategori layanan
+      map[cleanKey].informasi += infoVal;
+      map[cleanKey].permintaan += permVal;
+      map[cleanKey].pengaduan += pengVal;
+      map[cleanKey].slaSum += slaVal;
+      map[cleanKey].count += 1;
+    });
+
+    return Object.entries(map).map(([key, item]) => {
+      const total = item.informasi + item.permintaan + item.pengaduan;
+      const avgSla = item.count > 0 ? Math.round(item.slaSum / item.count) : 90;
+      const slaCompliance = Math.min(100, Math.max(0, avgSla));
+
+      return {
+        id: item.id,
+        name: item.name,
+        latitude: item.latitude,
+        longitude: item.longitude,
+        informasi: item.informasi,
+        permintaan: item.permintaan,
+        pengaduan: item.pengaduan,
+        total,
+        avgSlaDays: 2.4,
+        slaCompliance,
+      };
+    });
+  }, [currentCities]);
+
+  // Filtered cities list based on search query and selected island (using unique KC list)
   const filteredCities = useMemo(() => {
-    if (!currentCities) return [];
+    if (!uniqueCities) return [];
     const query = searchQuery.toLowerCase().trim();
-    return currentCities.filter(c => {
+    return uniqueCities.filter(c => {
       const island = getIslandForCity(c.name, c.latitude, c.longitude);
       const matchesIsland = selectedIsland === 'Semua' || island === selectedIsland;
       const matchesSearch = !query || 
@@ -201,7 +268,7 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
         island.toLowerCase().includes(query);
       return matchesIsland && matchesSearch;
     });
-  }, [currentCities, selectedIsland, searchQuery]);
+  }, [uniqueCities, selectedIsland, searchQuery]);
 
   // Convert real lat/lon values to detailed 1000x400 map coordinate canvas
   const projectCoords = (lat: number, lon: number) => {
@@ -220,9 +287,9 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
   };
 
   const selectedCity = useMemo(() => {
-    if (!currentCities || currentCities.length === 0) return null;
-    return currentCities.find(c => c.id === selectedCityId) || currentCities[0];
-  }, [currentCities, selectedCityId]);
+    if (!uniqueCities || uniqueCities.length === 0) return null;
+    return uniqueCities.find(c => c.id === selectedCityId) || uniqueCities[0];
+  }, [uniqueCities, selectedCityId]);
 
   // Map style mode set strictly to topografi
   const [mapStyle, setMapStyle] = useState<'voyager' | 'satellite' | 'topo' | 'osm' | 'svg'>('topo');
@@ -308,7 +375,7 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
 
     const query = searchQuery.toLowerCase().trim();
 
-    currentCities.forEach((city) => {
+    uniqueCities.forEach((city) => {
       const cityIsland = getIslandForCity(city.name, city.latitude, city.longitude);
       const matchesIsland = selectedIsland === 'Semua' || cityIsland === selectedIsland;
       const matchesSearch = !query || 
@@ -381,7 +448,7 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
 
       markersGroup.addLayer(marker);
     });
-  }, [currentCities, selectedCityId, selectedIsland, volumeThresholds, mapStyle, searchQuery]);
+  }, [uniqueCities, selectedCityId, selectedIsland, volumeThresholds, mapStyle, searchQuery]);
 
   // Smoothly Fly Map View when Island Filter Changes
   useEffect(() => {
@@ -407,15 +474,15 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
   // Fly to selected city when selected from list
   useEffect(() => {
     if (!leafletMapRef.current || !selectedCityId || mapStyle === 'svg') return;
-    const city = currentCities.find(c => c.id === selectedCityId);
+    const city = uniqueCities.find(c => c.id === selectedCityId);
     if (city) {
       leafletMapRef.current.flyTo([city.latitude, city.longitude], Math.max(leafletMapRef.current.getZoom(), 7), {
         duration: 0.8
       });
     }
-  }, [selectedCityId, mapStyle, currentCities]);
+  }, [selectedCityId, mapStyle, uniqueCities]);
 
-  // Intelligent fuzzy match helper for Indonesian KC and City names
+  // Intelligent fuzzy match helper for Indonesian KC and City names with precise land coordinates
   const findCityCoordinates = (rawName: string): { lat: number; lon: number } | null => {
     if (!rawName) return null;
     const rawLower = rawName.toLowerCase().trim();
@@ -425,10 +492,10 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
       return INDONESIAN_CITIES_COORDINATES[rawLower];
     }
 
-    // Clean standard Indonesian branch/city prefixes
+    // Clean standard Indonesian branch/city prefixes & suffixes
     const clean = rawLower
-      .replace(/^(kc[u]?|kantor\s+cabang|cabang|kota|kabupaten|kab\.|wilayah|daerah)\s+/i, '')
-      .replace(/\s+(branch|cabang|selatan|utara|timur|barat|pusat)$/i, '')
+      .replace(/^(kc[u|p]?|kantor\s+cabang|cabang|kota|kabupaten|kab\.|wilayah|daerah)\s+/i, '')
+      .replace(/\s+(branch|cabang|selatan|utara|timur|barat|pusat|\d+)$/gi, '')
       .trim();
 
     if (clean && INDONESIAN_CITIES_COORDINATES[clean]) {
@@ -453,7 +520,8 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
       return { lat: defMatch.latitude, lon: defMatch.longitude };
     }
 
-    return null;
+    // 4. Safe land fallback (Jakarta inland center) instead of random sea offsets
+    return { lat: -6.2088, lon: 106.8456 };
   };
 
   // Process rows into map points using current or updated config mappings
@@ -466,32 +534,72 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
     const matchedPengaduan = cfg.pengaduanColumn;
     const matchedSla = cfg.slaColumn;
 
-    const syncedCities: CityData[] = [];
-    rows.forEach((row, index) => {
+    // Grouping map to aggregate multiple rows for the same KC using SUM formula
+    const kcMap: Record<string, {
+      rawName: string;
+      latitude: number;
+      longitude: number;
+      informasi: number;
+      permintaan: number;
+      pengaduan: number;
+      slaSum: number;
+      count: number;
+    }> = {};
+
+    rows.forEach((row, rowIdx) => {
       const rawName = String(row[matchedKC] || '').trim();
       if (!rawName) return;
 
-      const coords = findCityCoordinates(rawName);
-      if (!coords) return;
+      const foundCoords = findCityCoordinates(rawName);
+      // Ensure coordinates are valid land coordinates in Indonesia (defaulting to Jakarta inland if unknown)
+      const coords = foundCoords || { lat: -6.2088, lon: 106.8456 };
 
-      const informasi = matchedInfo && row[matchedInfo] !== undefined ? Number(row[matchedInfo]) || 0 : 0;
-      const permintaan = matchedPermintaan && row[matchedPermintaan] !== undefined ? Number(row[matchedPermintaan]) || 0 : 0;
-      const pengaduan = matchedPengaduan && row[matchedPengaduan] !== undefined ? Number(row[matchedPengaduan]) || 0 : 0;
-      const total = informasi + permintaan + pengaduan;
-      const slaCompliance = matchedSla && row[matchedSla] !== undefined ? Number(row[matchedSla]) || 90 : 90;
+      const cleanKey = rawName.toLowerCase().trim();
 
-      syncedCities.push({
-        id: `sync_${index}_${Date.now()}`,
-        name: rawName,
-        latitude: coords.lat,
-        longitude: coords.lon,
-        informasi,
-        permintaan,
-        pengaduan,
+      const infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
+      const permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
+      const pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
+      const slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
+
+      if (!kcMap[cleanKey]) {
+        kcMap[cleanKey] = {
+          rawName,
+          latitude: coords.lat,
+          longitude: coords.lon,
+          informasi: 0,
+          permintaan: 0,
+          pengaduan: 0,
+          slaSum: 0,
+          count: 0,
+        };
+      }
+
+      // Rumus SUM per kategori layanan per Kantor Cabang unik
+      kcMap[cleanKey].informasi += infoVal;
+      kcMap[cleanKey].permintaan += permVal;
+      kcMap[cleanKey].pengaduan += pengVal;
+      kcMap[cleanKey].slaSum += slaVal;
+      kcMap[cleanKey].count += 1;
+    });
+
+    const syncedCities: CityData[] = Object.entries(kcMap).map(([key, item], index) => {
+      // Total layanan per kategori menggunakan rumus SUM
+      const total = item.informasi + item.permintaan + item.pengaduan;
+      const avgSla = item.count > 0 ? Math.round(item.slaSum / item.count) : 90;
+      const slaCompliance = Math.min(100, Math.max(0, avgSla));
+
+      return {
+        id: `kc_unique_${index}_${key}`,
+        name: item.rawName,
+        latitude: item.latitude,
+        longitude: item.longitude,
+        informasi: item.informasi,
+        permintaan: item.permintaan,
+        pengaduan: item.pengaduan,
         total,
         avgSlaDays: 2.4,
-        slaCompliance: Math.min(100, Math.max(0, slaCompliance))
-      });
+        slaCompliance,
+      };
     });
 
     if (syncedCities.length > 0) {
@@ -554,6 +662,10 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
     setSuccessMsg(null);
 
     try {
+      if (syncConfig.sheetUrl) {
+        localStorage.setItem('google_sheet_sync_url', syncConfig.sheetUrl);
+      }
+
       // 1. Fetch all sheet tabs from the Google Sheet through our backend proxy API
       const responseSheets = await fetch(`/api/get-sheets?url=${encodeURIComponent(syncConfig.sheetUrl)}`);
       let sheetsList: { id: string; name: string }[] = [];
@@ -598,14 +710,18 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
     }
   };
 
-  // Helper to parse a specific sheet inside an uploaded Excel/CSV workbook
+  // Helper to parse a specific sheet inside an uploaded Excel/CSV workbook (unrestricted rows & columns)
   const processExcelSheet = (wb: XLSX.WorkBook, sheetName: string, fileName?: string) => {
     const worksheet = wb.Sheets[sheetName];
     if (!worksheet) {
       setErrorMsg(`Sheet "${sheetName}" tidak ditemukan dalam file.`);
       return;
     }
-    const rawData = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { defval: '' });
+    const rawData = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { 
+      defval: '',
+      raw: false,
+      blankrows: false,
+    });
     if (!rawData || rawData.length === 0) {
       setErrorMsg(`Sheet "${sheetName}" kosong atau tidak memiliki baris data.`);
       setAvailableColumns([]);
@@ -613,7 +729,13 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
       return;
     }
 
-    const columns = Object.keys(rawData[0]);
+    // Collect all column headers from every row to avoid missing sparse columns
+    const colSet = new Set<string>();
+    rawData.forEach(row => {
+      Object.keys(row).forEach(k => colSet.add(k));
+    });
+    const columns = Array.from(colSet);
+
     setAvailableColumns(columns);
     setSheetRawRows(rawData);
 
@@ -621,7 +743,7 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
     const activeFileName = fileName || uploadedFileName || 'File Upload';
 
     if (mappedCount > 0) {
-      setSuccessMsg(`Berhasil memuat file "${activeFileName}"! Tab "${sheetName}" terdeteksi (${rawData.length} baris). ${mappedCount} lokasi Kantor Cabang disinkronkan ke peta.`);
+      setSuccessMsg(`Berhasil memuat file "${activeFileName}"! Tab "${sheetName}" terdeteksi (${rawData.length} baris data). ${mappedCount} lokasi Kantor Cabang disinkronkan ke peta.`);
     } else {
       setErrorMsg(`Tab "${sheetName}" terdeteksi tetapi tidak ada nama Kota/KC yang sesuai dengan koordinat peta Indonesia.`);
     }
@@ -767,17 +889,7 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
   };
 
   const parseSampleCSV = (csvText: string): any[] => {
-    const lines = csvText.split('\n');
-    const headers = lines[0].split(',');
-    return lines.slice(1).map(line => {
-      const values = line.split(',');
-      const obj: any = {};
-      headers.forEach((header, index) => {
-        const val = values[index];
-        obj[header] = isNaN(Number(val)) ? val : Number(val);
-      });
-      return obj;
-    });
+    return parseCSV(csvText);
   };
 
   const handleResetToDefault = () => {
@@ -889,28 +1001,28 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
           </div>
 
           {/* COMPACT & RINGKAS COLOR LEGEND BASED ON CONFIGURABLE SERVICE TOTAL */}
-          <div className="flex items-center justify-between gap-2 bg-slate-50/90 px-3 py-1.5 rounded-xl border border-slate-200/80 text-[11px] text-slate-600 mb-4 shadow-3xs flex-wrap">
-            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-              <span className="text-slate-500 font-extrabold uppercase tracking-wider text-[9px] shrink-0">Indikator Volume:</span>
+          <div className="flex items-center justify-between gap-3 bg-slate-50/90 px-4 py-2.5 rounded-xl border border-slate-200/80 text-xs text-slate-700 mb-4 shadow-3xs flex-wrap">
+            <div className="flex items-center gap-2.5 flex-wrap min-w-0">
+              <span className="text-slate-600 font-extrabold uppercase tracking-wider text-[11px] shrink-0">Indikator Volume:</span>
               
-              <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-md border border-slate-200/60 shadow-3xs">
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: '#818cf8' }}></span>
-                <span className="font-bold text-[10px] text-slate-700">&lt; {volumeThresholds.rendahMax} <span className="text-slate-400 font-normal">(Rendah)</span></span>
+              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-3xs">
+                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: '#818cf8' }}></span>
+                <span className="font-bold text-xs text-slate-800">&lt; {volumeThresholds.rendahMax} <span className="text-slate-500 font-normal">(Rendah)</span></span>
               </div>
 
-              <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-md border border-slate-200/60 shadow-3xs">
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: '#14b8a6' }}></span>
-                <span className="font-bold text-[10px] text-slate-700">{volumeThresholds.rendahMax + 1} - {volumeThresholds.sedangMax} <span className="text-slate-400 font-normal">(Sedang)</span></span>
+              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-3xs">
+                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: '#14b8a6' }}></span>
+                <span className="font-bold text-xs text-slate-800">{volumeThresholds.rendahMax + 1} - {volumeThresholds.sedangMax} <span className="text-slate-500 font-normal">(Sedang)</span></span>
               </div>
 
-              <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-md border border-slate-200/60 shadow-3xs">
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: '#f59e0b' }}></span>
-                <span className="font-bold text-[10px] text-slate-700">{volumeThresholds.sedangMax + 1} - {volumeThresholds.tinggiMax} <span className="text-slate-400 font-normal">(Tinggi)</span></span>
+              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-3xs">
+                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: '#f59e0b' }}></span>
+                <span className="font-bold text-xs text-slate-800">{volumeThresholds.sedangMax + 1} - {volumeThresholds.tinggiMax} <span className="text-slate-500 font-normal">(Tinggi)</span></span>
               </div>
 
-              <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-md border border-slate-200/60 shadow-3xs">
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: '#f43f5e' }}></span>
-                <span className="font-bold text-[10px] text-slate-700">&gt; {volumeThresholds.tinggiMax} <span className="text-slate-400 font-normal">(Sangat Tinggi)</span></span>
+              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-3xs">
+                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: '#f43f5e' }}></span>
+                <span className="font-bold text-xs text-slate-800">&gt; {volumeThresholds.tinggiMax} <span className="text-slate-500 font-normal">(Sangat Tinggi)</span></span>
               </div>
             </div>
 
@@ -920,11 +1032,11 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
                 setTempThresholds(volumeThresholds);
                 setIsIndicatorModalOpen(true);
               }}
-              className="flex items-center gap-1 text-[10px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-md border border-indigo-200/80 transition-colors cursor-pointer shrink-0 ml-auto shadow-3xs"
+              className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-lg border border-indigo-200 transition-colors cursor-pointer shrink-0 ml-auto shadow-3xs"
               id="edit-volume-indicator-btn"
               title="Edit Nilai Indikator Volume"
             >
-              <Settings2 className="h-3 w-3" />
+              <Settings2 className="h-3.5 w-3.5" />
               <span>Edit Indikator</span>
             </button>
           </div>

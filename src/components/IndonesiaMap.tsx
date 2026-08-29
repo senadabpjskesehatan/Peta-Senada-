@@ -1,121 +1,22 @@
 import { useState, useMemo, ChangeEvent, useEffect, useRef } from 'react';
-import { MapPin, RotateCw, Database, FileSpreadsheet, AlertCircle, CheckCircle, HelpCircle, X, Info, ArrowUpRight, Award, UploadCloud, Globe, FileUp, SlidersHorizontal, Layers, Table, Settings2, Save, Compass, Maximize2, Minimize2, Map as MapIcon, Eye, Search } from 'lucide-react';
+import { MapPin, RotateCw, Database, FileSpreadsheet, AlertCircle, CheckCircle, HelpCircle, X, Info, ArrowUpRight, Award, UploadCloud, Globe, FileUp, SlidersHorizontal, Layers, Table, Settings2, Save, Compass, Maximize2, Minimize2, Map as MapIcon, Eye, Search, Trophy, TrendingDown } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { CityData, MapSyncConfig } from '../types';
 import { fetchSheetData, extractSpreadsheetId, parseCSV, parseNumericValue } from '../utils/sheetParser';
 import { DEFAULT_CITIES, SAMPLE_SHEETS_CSV } from '../data/defaultData';
+import { INDONESIAN_CITIES_COORDINATES, findCityCoordinates, getIslandForCity } from '../data/indonesiaCoordinates';
 
 interface IndonesiaMapProps {
   onCitiesDataChange: (cities: CityData[]) => void;
   currentCities: CityData[];
+  isAdmin?: boolean;
+  onRequestAdminLogin?: () => void;
 }
 
-// Extensive Indonesian City / Kantor Cabang (KC) coordinates registry
-const INDONESIAN_CITIES_COORDINATES: Record<string, { lat: number; lon: number }> = {
-  'jakarta': { lat: -6.2088, lon: 106.8456 },
-  'surabaya': { lat: -7.2575, lon: 112.7521 },
-  'bandung': { lat: -6.9175, lon: 107.6191 },
-  'medan': { lat: 3.5952, lon: 98.6722 },
-  'makassar': { lat: -5.1477, lon: 119.4327 },
-  'semarang': { lat: -6.9667, lon: 110.4167 },
-  'palembang': { lat: -2.9761, lon: 104.7754 },
-  'denpasar': { lat: -8.6705, lon: 115.2126 },
-  'balikpapan': { lat: -1.2654, lon: 116.8312 },
-  'yogyakarta': { lat: -7.7956, lon: 110.3695 },
-  'pontianak': { lat: -0.0263, lon: 109.3425 },
-  'jayapura': { lat: -2.5916, lon: 140.7181 },
-  'banda aceh': { lat: 5.5483, lon: 95.3238 },
-  'aceh': { lat: 5.5483, lon: 95.3238 },
-  'ambon': { lat: -3.6547, lon: 128.1906 },
-  'kupang': { lat: -10.1772, lon: 123.6077 },
-  'samarinda': { lat: -0.5021, lon: 117.1536 },
-  'banjarmasin': { lat: -3.3166, lon: 114.5901 },
-  'manado': { lat: 1.4748, lon: 124.8420 },
-  'padang': { lat: -0.9471, lon: 100.4172 },
-  'pekanbaru': { lat: 0.5071, lon: 101.4478 },
-  'jambi': { lat: -1.6101, lon: 103.6131 },
-  'bengkulu': { lat: -3.7928, lon: 102.2608 },
-  'bandar lampung': { lat: -5.3971, lon: 105.2668 },
-  'lampung': { lat: -5.3971, lon: 105.2668 },
-  'serang': { lat: -6.1153, lon: 106.1542 },
-  'mataram': { lat: -8.5822, lon: 116.1167 },
-  'palu': { lat: -0.8917, lon: 119.8707 },
-  'kendari': { lat: -3.9722, lon: 122.5149 },
-  'gorontalo': { lat: 0.5435, lon: 123.0568 },
-  'ternate': { lat: 0.7893, lon: 127.3756 },
-  'sorong': { lat: -0.8765, lon: 131.2558 },
-  'tarakan': { lat: 3.3267, lon: 117.5891 },
-  'malang': { lat: -7.9650, lon: 112.6304 },
-  'solo': { lat: -7.5755, lon: 110.8243 },
-  'surakarta': { lat: -7.5755, lon: 110.8243 },
-  'cirebon': { lat: -6.7320, lon: 108.5523 },
-  'bogor': { lat: -6.5971, lon: 106.8060 },
-  'bekasi': { lat: -6.2383, lon: 106.9756 },
-  'tangerang': { lat: -6.1783, lon: 106.6300 },
-  'depok': { lat: -6.4025, lon: 106.7942 },
-  'tasikmalaya': { lat: -7.3274, lon: 108.2207 },
-  'purwokerto': { lat: -7.4244, lon: 109.2301 },
-  'tegal': { lat: -6.8694, lon: 109.1250 },
-  'sukabumi': { lat: -6.9277, lon: 106.9300 },
-  'kediri': { lat: -7.8167, lon: 112.0167 },
-  'jember': { lat: -8.1844, lon: 113.6681 },
-  'probolinggo': { lat: -7.7540, lon: 113.2159 },
-  'banyuwangi': { lat: -8.2192, lon: 114.3691 },
-  'madiun': { lat: -7.6298, lon: 111.5239 },
-  'blitar': { lat: -8.0983, lon: 112.1681 },
-  'pamekasan': { lat: -7.1598, lon: 113.4831 },
-  'sumenep': { lat: -7.0091, lon: 113.8617 },
-  'singkawang': { lat: 0.9080, lon: 108.9856 },
-  'sintang': { lat: 0.0764, lon: 111.4994 },
-  'ketapang': { lat: -1.8504, lon: 109.9725 },
-  'sampit': { lat: -2.5350, lon: 112.9554 },
-  'pangkalan bun': { lat: -2.6833, lon: 111.6167 },
-  'bontang': { lat: 0.1333, lon: 117.5000 },
-  'tanjung selor': { lat: 2.8333, lon: 117.3667 },
-  'palopo': { lat: -2.9928, lon: 120.1947 },
-  'parepare': { lat: -4.0131, lon: 119.6310 },
-  'bau-bau': { lat: -5.4667, lon: 122.6000 },
-  'baubau': { lat: -5.4667, lon: 122.6000 },
-  'bima': { lat: -8.4552, lon: 118.7247 },
-  'sumbawa besar': { lat: -8.4975, lon: 117.4244 },
-  'maumere': { lat: -8.6231, lon: 122.2131 },
-  'ende': { lat: -8.8433, lon: 121.6622 },
-  'waingapu': { lat: -9.6547, lon: 120.2642 },
-  'atambua': { lat: -9.1086, lon: 124.8911 },
-  'meulaboh': { lat: 4.1436, lon: 96.1283 },
-  'lhokseumawe': { lat: 5.1801, lon: 97.1507 },
-  'langsa': { lat: 4.4714, lon: 97.9678 },
-  'subulussalam': { lat: 2.6377, lon: 98.0051 },
-  'sibolga': { lat: 1.7388, lon: 98.7892 },
-  'pematangsiantar': { lat: 2.9610, lon: 99.0682 },
-  'siantar': { lat: 2.9610, lon: 99.0682 },
-  'binjai': { lat: 3.6139, lon: 98.4925 },
-  'tebing tinggi': { lat: 3.3283, lon: 99.1625 },
-  'padangsidimpuan': { lat: 1.3736, lon: 99.2683 },
-  'gunungsitoli': { lat: 1.2901, lon: 97.6150 },
-  'bukittinggi': { lat: -0.3055, lon: 100.3691 },
-  'payakumbuh': { lat: -0.2201, lon: 100.6308 },
-  'pariaman': { lat: -0.6272, lon: 100.1204 },
-  'solok': { lat: -0.8033, lon: 100.6583 },
-  'sawahlunto': { lat: -0.6692, lon: 100.7761 },
-  'dumai': { lat: 1.6683, lon: 101.4428 },
-  'sungai penuh': { lat: -2.0622, lon: 101.4000 },
-  'lubuklinggau': { lat: -3.2952, lon: 102.8610 },
-  'pagar alam': { lat: -4.0183, lon: 103.2661 },
-  'prabumulih': { lat: -3.4283, lon: 104.2250 },
-  'baturaja': { lat: -4.1300, lon: 104.1667 },
-  'metro': { lat: -5.1139, lon: 105.3061 },
-  'pangkal pinang': { lat: -2.1283, lon: 106.1161 },
-  'pangkalpinang': { lat: -2.1283, lon: 106.1161 },
-  'tanjung pandan': { lat: -2.7350, lon: 107.6367 },
-  'batam': { lat: 1.1301, lon: 104.0528 },
-  'tanjung pinang': { lat: 0.9153, lon: 104.4503 },
-  'tanjungpinang': { lat: 0.9153, lon: 104.4503 },
-};
 
-export default function IndonesiaMap({ onCitiesDataChange, currentCities }: IndonesiaMapProps) {
+export default function IndonesiaMap({ onCitiesDataChange, currentCities, isAdmin = false, onRequestAdminLogin }: IndonesiaMapProps) {
   const [syncConfig, setSyncConfig] = useState<MapSyncConfig>({
     sheetUrl: '',
     sheetId: '',
@@ -166,30 +67,10 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
   // Island filter state
   const [selectedIsland, setSelectedIsland] = useState<string>('Semua');
 
-  // Helper to match city to major Indonesian Island based on name or geographic coordinates
-  const getIslandForCity = (cityName: string, lat: number, lon: number): string => {
-    if (!cityName) return 'Lainnya';
-    const name = cityName.toLowerCase();
+  // Ranking metric state for Top 10 & Bottom 10
+  const [rankingMetric, setRankingMetric] = useState<'total' | 'informasi' | 'permintaan' | 'pengaduan' | 'slaCompliance'>('total');
 
-    if (/aceh|medan|padang|pekanbaru|jambi|palembang|bengkulu|lampung|batam|tanjungpinang|dumai|meulaboh|lhokseumawe|langsa|sibolga|siantar|binjai|bukittinggi|payakumbuh|pariaman|solok|lubuklinggau|pangkal|bangka|belitung/i.test(name)) return 'Sumatera';
-    if (/jakarta|bandung|semarang|yogyakarta|jogja|surabaya|serang|bogor|depok|tangerang|bekasi|cirebon|malang|solo|surakarta|tasikmalaya|purwokerto|tegal|sukabumi|kediri|jember|probolinggo|banyuwangi|madiun|blitar|pamekasan|sumenep|banten/i.test(name)) return 'Jawa';
-    if (/pontianak|palangkaraya|palangka|banjarmasin|samarinda|balikpapan|tarakan|singkawang|sintang|ketapang|sampit|pangkalan|bontang|kutai|kaltim|kalbar|kalsel|kalteng|kaltara/i.test(name)) return 'Kalimantan';
-    if (/makassar|manado|palu|kendari|gorontalo|mamuju|palopo|parepare|baubau|sulawesi|sulsel|sulut|sulteng|sultra|sulbar/i.test(name)) return 'Sulawesi';
-    if (/denpasar|bali|mataram|kupang|bima|sumbawa|maumere|ende|waingapu|atambua|ntb|ntt|lombok|flores|timor/i.test(name)) return 'Bali & Nusa Tenggara';
-    if (/ambon|jayapura|sorong|ternate|manokwari|merauke|timika|biak|nabire|maluku|papua/i.test(name)) return 'Maluku & Papua';
-
-    // Geographic Coordinate Bounding Box Fallback
-    if (lon >= 95 && lon <= 106.2 && lat >= -6 && lat <= 6) return 'Sumatera';
-    if (lon >= 105.5 && lon <= 115.5 && lat >= -9 && lat <= -5.5) return 'Jawa';
-    if (lon >= 108.5 && lon <= 119.5 && lat >= -4.5 && lat <= 4.5) return 'Kalimantan';
-    if (lon >= 118.5 && lon <= 125.5 && lat >= -6 && lat <= 2.5) return 'Sulawesi';
-    if (lon >= 114.5 && lon <= 125.5 && lat >= -11 && lat <= -7) return 'Bali & Nusa Tenggara';
-    if (lon >= 124.5 && lon <= 141.5 && lat >= -10 && lat <= 3) return 'Maluku & Papua';
-
-    return 'Lainnya';
-  };
-
-  // Aggregate and deduplicate KC data by unique Kantor Cabang name using SUM formula
+  // Aggregate and deduplicate KC data by unique Kantor Cabang name using SUM formula and accurate GPS coordinates
   const uniqueCities = useMemo(() => {
     if (!currentCities || currentCities.length === 0) return [];
 
@@ -214,12 +95,17 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
       const pengVal = parseNumericValue(c.pengaduan);
       const slaVal = parseNumericValue(c.slaCompliance) || 90;
 
+      // Always resolve accurate geographic coordinates for Indonesian cities & KC
+      const resolved = findCityCoordinates(c.name);
+      const lat = (resolved && resolved.lat !== 0) ? resolved.lat : (c.latitude || -6.2088);
+      const lon = (resolved && resolved.lon !== 0) ? resolved.lon : (c.longitude || 106.8456);
+
       if (!map[cleanKey]) {
         map[cleanKey] = {
           id: c.id,
           name: c.name,
-          latitude: c.latitude,
-          longitude: c.longitude,
+          latitude: lat,
+          longitude: lon,
           informasi: 0,
           permintaan: 0,
           pengaduan: 0,
@@ -236,13 +122,13 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
       map[cleanKey].count += 1;
     });
 
-    return Object.entries(map).map(([key, item]) => {
+    return Object.entries(map).map(([key, item], index) => {
       const total = item.informasi + item.permintaan + item.pengaduan;
       const avgSla = item.count > 0 ? Math.round(item.slaSum / item.count) : 90;
       const slaCompliance = Math.min(100, Math.max(0, avgSla));
 
       return {
-        id: item.id,
+        id: item.id || `kc_uniq_${index}_${key.replace(/[^a-z0-9]/gi, '_')}`,
         name: item.name,
         latitude: item.latitude,
         longitude: item.longitude,
@@ -255,6 +141,19 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
       };
     });
   }, [currentCities]);
+
+  // Compute Top 10 & Bottom 10 rankings
+  const { top10, bottom10 } = useMemo(() => {
+    if (!uniqueCities) return { top10: [], bottom10: [] };
+    const sorted = [...uniqueCities].sort((a, b) => {
+      const valA = parseNumericValue(a[rankingMetric]);
+      const valB = parseNumericValue(b[rankingMetric]);
+      return valB - valA;
+    });
+    const top = sorted.slice(0, 10);
+    const bottom = [...sorted].reverse().slice(0, 10);
+    return { top10: top, bottom10: bottom };
+  }, [uniqueCities, rankingMetric]);
 
   // Filtered cities list based on search query and selected island (using unique KC list)
   const filteredCities = useMemo(() => {
@@ -482,48 +381,6 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
     }
   }, [selectedCityId, mapStyle, uniqueCities]);
 
-  // Intelligent fuzzy match helper for Indonesian KC and City names with precise land coordinates
-  const findCityCoordinates = (rawName: string): { lat: number; lon: number } | null => {
-    if (!rawName) return null;
-    const rawLower = rawName.toLowerCase().trim();
-
-    // 1. Direct match in coordinates dictionary
-    if (INDONESIAN_CITIES_COORDINATES[rawLower]) {
-      return INDONESIAN_CITIES_COORDINATES[rawLower];
-    }
-
-    // Clean standard Indonesian branch/city prefixes & suffixes
-    const clean = rawLower
-      .replace(/^(kc[u|p]?|kantor\s+cabang|cabang|kota|kabupaten|kab\.|wilayah|daerah)\s+/i, '')
-      .replace(/\s+(branch|cabang|selatan|utara|timur|barat|pusat|\d+)$/gi, '')
-      .trim();
-
-    if (clean && INDONESIAN_CITIES_COORDINATES[clean]) {
-      return INDONESIAN_CITIES_COORDINATES[clean];
-    }
-
-    // 2. Substring matching in keys
-    const dictKeys = Object.keys(INDONESIAN_CITIES_COORDINATES);
-    for (const key of dictKeys) {
-      if ((clean && (clean.includes(key) || key.includes(clean))) || rawLower.includes(key)) {
-        return INDONESIAN_CITIES_COORDINATES[key];
-      }
-    }
-
-    // 3. Fallback to default cities list coordinates
-    const defMatch = DEFAULT_CITIES.find(c => {
-      const cn = c.name.toLowerCase();
-      return (clean && (clean.includes(cn) || cn.includes(clean))) || rawLower.includes(cn);
-    });
-
-    if (defMatch) {
-      return { lat: defMatch.latitude, lon: defMatch.longitude };
-    }
-
-    // 4. Safe land fallback (Jakarta inland center) instead of random sea offsets
-    return { lat: -6.2088, lon: 106.8456 };
-  };
-
   // Process rows into map points using current or updated config mappings
   const applyRowsWithConfig = (rows: any[], cfg: MapSyncConfig) => {
     if (!rows || rows.length === 0) return 0;
@@ -604,6 +461,12 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
 
     if (syncedCities.length > 0) {
       onCitiesDataChange(syncedCities);
+      try {
+        localStorage.setItem('indonesia_map_synced_default_cities', JSON.stringify(syncedCities));
+        localStorage.setItem('indonesia_map_cities_data_v3', JSON.stringify(syncedCities));
+      } catch (e) {
+        console.error('Failed to save synced default cities', e);
+      }
       setSyncConfig(prev => ({ ...prev, ...cfg, isSynced: true, lastSyncedAt: new Date().toLocaleTimeString() }));
       if (syncedCities[0]) {
         setSelectedCityId(syncedCities[0].id);
@@ -893,6 +756,19 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
   };
 
   const handleResetToDefault = () => {
+    try {
+      const savedSynced = localStorage.getItem('indonesia_map_synced_default_cities');
+      if (savedSynced) {
+        const parsed = JSON.parse(savedSynced);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          onCitiesDataChange(parsed);
+          setSuccessMsg('Kembali ke data Google Sheet yang tersinkron.');
+          setTimeout(() => setSuccessMsg(null), 2000);
+          return;
+        }
+      }
+    } catch (e) {}
+
     onCitiesDataChange(DEFAULT_CITIES);
     setSyncConfig({
       sheetUrl: '',
@@ -978,17 +854,29 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
                 )}
               </div>
 
-              <button
-                onClick={() => setIsModalOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
-                id="open-sync-modal-btn"
-                title="Sinkronisasi Google Spreadsheet"
-              >
-                <FileSpreadsheet className="h-4 w-4" />
-                <span>Sync Sheet / Excel</span>
-              </button>
+              {isAdmin ? (
+                <button
+                  onClick={() => setIsModalOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                  id="open-sync-modal-btn"
+                  title="Sinkronisasi Google Spreadsheet (Admin)"
+                >
+                  <FileSpreadsheet className="h-4 w-4" />
+                  <span>Sync Sheet / Excel</span>
+                </button>
+              ) : (
+                <button
+                  onClick={onRequestAdminLogin}
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 bg-slate-100 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-semibold transition-all shadow-2xs cursor-pointer"
+                  id="open-sync-modal-btn"
+                  title="Login Admin untuk Sinkronisasi Data"
+                >
+                  <FileSpreadsheet className="h-4 w-4 text-slate-400" />
+                  <span>Sync (Admin)</span>
+                </button>
+              )}
 
-              {syncConfig.isSynced && (
+              {syncConfig.isSynced && isAdmin && (
                 <button
                   onClick={handleResetToDefault}
                   className="px-3 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
@@ -1026,19 +914,21 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                setTempThresholds(volumeThresholds);
-                setIsIndicatorModalOpen(true);
-              }}
-              className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-lg border border-indigo-200 transition-colors cursor-pointer shrink-0 ml-auto shadow-3xs"
-              id="edit-volume-indicator-btn"
-              title="Edit Nilai Indikator Volume"
-            >
-              <Settings2 className="h-3.5 w-3.5" />
-              <span>Edit Indikator</span>
-            </button>
+            {isAdmin ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setTempThresholds(volumeThresholds);
+                  setIsIndicatorModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-lg border border-indigo-200 transition-colors cursor-pointer shrink-0 ml-auto shadow-3xs"
+                id="edit-volume-indicator-btn"
+                title="Edit Nilai Indikator Volume (Admin)"
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+                <span>Edit Indikator</span>
+              </button>
+            ) : null}
           </div>
 
           {/* MAP MODE TABS / LAYER SELECTOR (Hidden as requested) */}
@@ -1462,6 +1352,144 @@ export default function IndonesiaMap({ onCitiesDataChange, currentCities }: Indo
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
             Live Data Active
           </span>
+        </div>
+      </div>
+
+      {/* TOP 10 & BOTTOM 10 LAYANAN / KANTOR CABANG SECTION */}
+      <div className="col-span-12 lg:col-span-12 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-100">
+          <div>
+            <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+              <Trophy className="text-amber-500 h-5 w-5" />
+              Peringkat 10 Top & 10 Bottom Layanan / Kantor Cabang
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">Analisis komparatif unit layanan terbaik dan unit yang memerlukan perhatian khusus di peta.</p>
+          </div>
+
+          {/* Metric Selector Tabs */}
+          <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200 text-xs">
+            <span className="text-[10px] text-slate-400 font-bold px-2 uppercase">Kriteria:</span>
+            <button
+              onClick={() => setRankingMetric('total')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'total' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Total Laporan
+            </button>
+            <button
+              onClick={() => setRankingMetric('slaCompliance')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'slaCompliance' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Kepatuhan SLA
+            </button>
+            <button
+              onClick={() => setRankingMetric('informasi')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'informasi' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Informasi
+            </button>
+            <button
+              onClick={() => setRankingMetric('permintaan')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'permintaan' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Permintaan
+            </button>
+            <button
+              onClick={() => setRankingMetric('pengaduan')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'pengaduan' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Pengaduan
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          
+          {/* TOP 10 LAYANAN / CABANG */}
+          <div className="bg-emerald-50/20 border border-emerald-200/80 rounded-2xl p-5 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="font-bold text-emerald-900 text-sm flex items-center gap-2">
+                  <Trophy className="h-4.5 w-4.5 text-emerald-600" />
+                  10 Top Layanan & Kantor Cabang Terbaik
+                </h4>
+                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-lg">Tertinggi</span>
+              </div>
+
+              <div className="space-y-2.5">
+                {top10.map((item, index) => {
+                  const val = parseNumericValue(item[rankingMetric]);
+                  return (
+                    <div 
+                      key={`top-${item.id}`} 
+                      onClick={() => setSelectedCityId(item.id)}
+                      className={`bg-white border p-3 rounded-xl flex items-center justify-between text-xs shadow-2xs transition-colors cursor-pointer ${selectedCityId === item.id ? 'border-emerald-500 ring-1 ring-emerald-500 bg-emerald-50/30' : 'border-emerald-100 hover:border-emerald-300'}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={`w-6 h-6 rounded-lg flex items-center justify-center font-bold font-mono text-[11px] ${
+                          index === 0 ? 'bg-amber-400 text-white shadow-xs' :
+                          index === 1 ? 'bg-slate-300 text-slate-800' :
+                          index === 2 ? 'bg-amber-700 text-white' : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {index + 1}
+                        </span>
+                        <div>
+                          <span className="font-bold text-slate-800 block">{item.name}</span>
+                          <span className="text-[10px] text-slate-400">SLA: {item.slaCompliance}% | Rata-rata: {item.avgSlaDays} hari</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-mono font-black text-emerald-700 text-sm">
+                          {val} {rankingMetric === 'slaCompliance' ? '%' : 'laporan'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* BOTTOM 10 LAYANAN / CABANG */}
+          <div className="bg-rose-50/20 border border-rose-200/80 rounded-2xl p-5 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="font-bold text-rose-900 text-sm flex items-center gap-2">
+                  <TrendingDown className="h-4.5 w-4.5 text-rose-600" />
+                  10 Bottom Layanan & Kantor Cabang (Perlu Perhatian)
+                </h4>
+                <span className="text-[10px] font-bold bg-rose-100 text-rose-800 px-2.5 py-1 rounded-lg">Terendah</span>
+              </div>
+
+              <div className="space-y-2.5">
+                {bottom10.map((item, index) => {
+                  const val = parseNumericValue(item[rankingMetric]);
+                  return (
+                    <div 
+                      key={`bottom-${item.id}`} 
+                      onClick={() => setSelectedCityId(item.id)}
+                      className={`bg-white border p-3 rounded-xl flex items-center justify-between text-xs shadow-2xs transition-colors cursor-pointer ${selectedCityId === item.id ? 'border-rose-500 ring-1 ring-rose-500 bg-rose-50/30' : 'border-rose-100 hover:border-rose-300'}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="w-6 h-6 rounded-lg flex items-center justify-center font-bold font-mono text-[11px] bg-rose-100 text-rose-700">
+                          {index + 1}
+                        </span>
+                        <div>
+                          <span className="font-bold text-slate-800 block">{item.name}</span>
+                          <span className="text-[10px] text-slate-400">SLA: {item.slaCompliance}% | Rata-rata: {item.avgSlaDays} hari</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-mono font-black text-rose-700 text-sm">
+                          {val} {rankingMetric === 'slaCompliance' ? '%' : 'laporan'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 

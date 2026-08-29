@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, PieChart, Pie, Cell } from 'recharts';
-import { Info, HelpCircle, FileText, ArrowUpRight, TrendingUp, Sparkles, Award } from 'lucide-react';
+import { Info, HelpCircle, FileText, ArrowUpRight, TrendingUp, Sparkles, Award, Trophy, TrendingDown } from 'lucide-react';
 import { CityData, MonthlyPerformance } from '../types';
 import { parseNumericValue } from '../utils/sheetParser';
 
@@ -11,6 +11,7 @@ interface MonthlyAnalyticsProps {
 
 export default function MonthlyAnalytics({ citiesData, monthlyData }: MonthlyAnalyticsProps) {
   const [activeTab, setActiveTab] = useState<'volume' | 'sla' | 'satisfaction'>('volume');
+  const [rankingMetric, setRankingMetric] = useState<'total' | 'informasi' | 'permintaan' | 'pengaduan' | 'slaCompliance'>('total');
 
   // Calculate global statistics across all cities
   const serviceTotals = useMemo(() => {
@@ -88,6 +89,20 @@ export default function MonthlyAnalytics({ citiesData, monthlyData }: MonthlyAna
       }
     ];
   }, [monthlyData, serviceTotals]);
+
+  // Compute top 10 and bottom 10 rankings based on selected rankingMetric
+  const { top10, bottom10 } = useMemo(() => {
+    const sorted = [...citiesData].sort((a, b) => {
+      const valA = parseNumericValue(a[rankingMetric]);
+      const valB = parseNumericValue(b[rankingMetric]);
+      return valB - valA; // Descending
+    });
+
+    const top = sorted.slice(0, 10);
+    const bottom = [...sorted].reverse().slice(0, 10); // Lowest 10
+
+    return { top10: top, bottom10: bottom };
+  }, [citiesData, rankingMetric]);
 
   // Format custom tooltip for Recharts
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -331,6 +346,136 @@ export default function MonthlyAnalytics({ citiesData, monthlyData }: MonthlyAna
           </div>
         </div>
 
+      </div>
+
+      {/* TOP 10 & BOTTOM 10 LAYANAN / KANTOR CABANG SECTION */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-100">
+          <div>
+            <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+              <Trophy className="text-amber-500 h-5 w-5" />
+              Peringkat 10 Top & 10 Bottom Layanan / Kantor Cabang
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">Analisis komparatif unit layanan terbaik dan unit yang memerlukan perhatian khusus.</p>
+          </div>
+
+          {/* Metric Selector Tabs */}
+          <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200 text-xs">
+            <span className="text-[10px] text-slate-400 font-bold px-2 uppercase">Kriteria:</span>
+            <button
+              onClick={() => setRankingMetric('total')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'total' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Total Laporan
+            </button>
+            <button
+              onClick={() => setRankingMetric('slaCompliance')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'slaCompliance' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Kepatuhan SLA
+            </button>
+            <button
+              onClick={() => setRankingMetric('informasi')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'informasi' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Informasi
+            </button>
+            <button
+              onClick={() => setRankingMetric('permintaan')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'permintaan' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Permintaan
+            </button>
+            <button
+              onClick={() => setRankingMetric('pengaduan')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'pengaduan' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+            >
+              Pengaduan
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          
+          {/* TOP 10 LAYANAN / CABANG */}
+          <div className="bg-emerald-50/20 border border-emerald-200/80 rounded-2xl p-5 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="font-bold text-emerald-900 text-sm flex items-center gap-2">
+                  <Trophy className="h-4.5 w-4.5 text-emerald-600" />
+                  10 Top Layanan & Kantor Cabang Terbaik
+                </h4>
+                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-lg">Tertinggi</span>
+              </div>
+
+              <div className="space-y-2.5">
+                {top10.map((item, index) => {
+                  const val = parseNumericValue(item[rankingMetric]);
+                  return (
+                    <div key={`top-${item.id}`} className="bg-white border border-emerald-100 p-3 rounded-xl flex items-center justify-between text-xs shadow-2xs hover:border-emerald-300 transition-colors">
+                      <div className="flex items-center gap-3">
+                        <span className={`w-6 h-6 rounded-lg flex items-center justify-center font-bold font-mono text-[11px] ${
+                          index === 0 ? 'bg-amber-400 text-white shadow-xs' :
+                          index === 1 ? 'bg-slate-300 text-slate-800' :
+                          index === 2 ? 'bg-amber-700 text-white' : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {index + 1}
+                        </span>
+                        <div>
+                          <span className="font-bold text-slate-800 block">{item.name}</span>
+                          <span className="text-[10px] text-slate-400">SLA: {item.slaCompliance}% | Rata-rata: {item.avgSlaDays} hari</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-mono font-black text-emerald-700 text-sm">
+                          {val} {rankingMetric === 'slaCompliance' ? '%' : 'laporan'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* BOTTOM 10 LAYANAN / CABANG */}
+          <div className="bg-rose-50/20 border border-rose-200/80 rounded-2xl p-5 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="font-bold text-rose-900 text-sm flex items-center gap-2">
+                  <TrendingDown className="h-4.5 w-4.5 text-rose-600" />
+                  10 Bottom Layanan & Kantor Cabang (Perlu Perhatian)
+                </h4>
+                <span className="text-[10px] font-bold bg-rose-100 text-rose-800 px-2.5 py-1 rounded-lg">Terendah</span>
+              </div>
+
+              <div className="space-y-2.5">
+                {bottom10.map((item, index) => {
+                  const val = parseNumericValue(item[rankingMetric]);
+                  return (
+                    <div key={`bottom-${item.id}`} className="bg-white border border-rose-100 p-3 rounded-xl flex items-center justify-between text-xs shadow-2xs hover:border-rose-300 transition-colors">
+                      <div className="flex items-center gap-3">
+                        <span className="w-6 h-6 rounded-lg flex items-center justify-center font-bold font-mono text-[11px] bg-rose-100 text-rose-700">
+                          {index + 1}
+                        </span>
+                        <div>
+                          <span className="font-bold text-slate-800 block">{item.name}</span>
+                          <span className="text-[10px] text-slate-400">SLA: {item.slaCompliance}% | Rata-rata: {item.avgSlaDays} hari</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-mono font-black text-rose-700 text-sm">
+                          {val} {rankingMetric === 'slaCompliance' ? '%' : 'laporan'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+        </div>
       </div>
 
     </div>

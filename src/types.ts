@@ -33,12 +33,16 @@ export interface Ticket {
 export interface DynamicChart {
   id: string;
   title: string;
+  icon?: string;
   type: 'line' | 'bar' | 'pie' | 'area';
   source: 'default' | 'sheets';
   sheetUrl: string;
   sheetId: string;
   xAxisColumn: string;
-  yAxisColumn: string;
+  xAxisColumns?: string[];
+  yAxisColumn?: string;
+  yAxisColumns?: string[];
+  pieColumns?: string[];
   isSynced: boolean;
   lastSyncedAt?: string;
   syncedData?: any[];

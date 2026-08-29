@@ -19,7 +19,14 @@ import {
   Database,
   Share2,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  Lock,
+  Unlock,
+  Shield,
+  ShieldAlert,
+  UserCheck,
+  LogOut,
+  LogIn
 } from 'lucide-react';
 
 import { CityData, Ticket, MonthlyPerformance, DynamicChart } from './types';
@@ -31,17 +38,43 @@ import IndonesiaMap from './components/IndonesiaMap';
 import SlaTracker from './components/SlaTracker';
 import MonthlyAnalytics from './components/MonthlyAnalytics';
 import DynamicChartItem from './components/DynamicChartItem';
+import AdminLoginModal from './components/AdminLoginModal';
 
 const CITIES_STORAGE_KEY = 'indonesia_map_cities_data_v3';
+const SYNCED_DEFAULT_CITIES_KEY = 'indonesia_map_synced_default_cities';
+const CHARTS_STORAGE_KEY = 'indonesia_map_dynamic_charts_v3';
 
 export default function App() {
-  // Global Unified States initialized with localStorage persistence
+  // Global Unified States initialized with localStorage persistence (prioritizing synced default data from Google Sheet with verified coordinates)
   const [citiesData, setCitiesData] = useState<CityData[]>(() => {
     try {
+      const syncedDefault = localStorage.getItem(SYNCED_DEFAULT_CITIES_KEY);
+      if (syncedDefault) {
+        const parsed = JSON.parse(syncedDefault);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map(c => {
+            const resolved = findCityCoordinates(c.name);
+            return {
+              ...c,
+              latitude: resolved ? resolved.lat : (c.latitude || -6.2088),
+              longitude: resolved ? resolved.lon : (c.longitude || 106.8456)
+            };
+          });
+        }
+      }
       const saved = localStorage.getItem(CITIES_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map(c => {
+            const resolved = findCityCoordinates(c.name);
+            return {
+              ...c,
+              latitude: resolved ? resolved.lat : (c.latitude || -6.2088),
+              longitude: resolved ? resolved.lon : (c.longitude || 106.8456)
+            };
+          });
+        }
       }
     } catch (e) {
       console.error('Failed to load saved cities data', e);
@@ -51,10 +84,51 @@ export default function App() {
 
   const [ticketsData, setTicketsData] = useState<Ticket[]>(DEFAULT_TICKETS);
   const [monthlyData, setMonthlyData] = useState<MonthlyPerformance[]>(MONTHLY_PERFORMANCE);
-  const [dynamicCharts, setDynamicCharts] = useState<DynamicChart[]>(DEFAULT_CHARTS);
+  const [dynamicCharts, setDynamicCharts] = useState<DynamicChart[]>(() => {
+    try {
+      const savedCharts = localStorage.getItem(CHARTS_STORAGE_KEY);
+      if (savedCharts) {
+        const parsed = JSON.parse(savedCharts);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map(ch => ({
+            ...ch,
+            source: ch.source || 'default',
+            xAxisColumns: ch.xAxisColumns || (ch.xAxisColumn ? [ch.xAxisColumn] : ['name']),
+            xAxisColumn: ch.xAxisColumn || 'name',
+            yAxisColumns: ch.yAxisColumns && ch.yAxisColumns.length > 0 ? ch.yAxisColumns : ['informasi', 'permintaan', 'pengaduan'],
+            pieColumns: ch.pieColumns && ch.pieColumns.length > 0 ? ch.pieColumns : ['informasi', 'permintaan', 'pengaduan'],
+            isSynced: true
+          }));
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load saved charts', e);
+    }
+    return DEFAULT_CHARTS;
+  });
   const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts'>('map');
   const [showCopyNotification, setShowCopyNotification] = useState(false);
   const [showCopyDialog, setShowCopyDialog] = useState<string | null>(null);
+
+  // Authentication & Guest / Admin Mode state (Default: Guest / Mode Tamu unless previously logged in as admin)
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    return localStorage.getItem('is_admin_logged_in') === 'true';
+  });
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+
+  const handleAdminLoginSuccess = () => {
+    setIsAdmin(true);
+    localStorage.setItem('is_admin_logged_in', 'true');
+    setSyncStatusToast('Berhasil Login sebagai Administrator (User: senada)');
+    setTimeout(() => setSyncStatusToast(null), 3000);
+  };
+
+  const handleAdminLogout = () => {
+    setIsAdmin(false);
+    localStorage.removeItem('is_admin_logged_in');
+    setSyncStatusToast('Beralih ke Mode Tamu (View Only)');
+    setTimeout(() => setSyncStatusToast(null), 3000);
+  };
 
   // Save cities data to localStorage whenever updated
   useEffect(() => {
@@ -64,6 +138,15 @@ export default function App() {
       console.error('Failed to save cities data to storage', e);
     }
   }, [citiesData]);
+
+  // Save dynamic charts to localStorage whenever updated
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHARTS_STORAGE_KEY, JSON.stringify(dynamicCharts));
+    } catch (e) {
+      console.error('Failed to save dynamic charts to storage', e);
+    }
+  }, [dynamicCharts]);
 
   // Global aggregate metrics computed on the fly from current Excel / Sheet cities data
   const summaryMetrics = useMemo(() => {
@@ -107,9 +190,11 @@ export default function App() {
       source: 'default',
       sheetUrl: '',
       sheetId: '',
-      xAxisColumn: 'month',
-      yAxisColumn: 'informasi',
-      isSynced: false,
+      xAxisColumn: 'name',
+      xAxisColumns: ['name'],
+      yAxisColumns: ['informasi', 'permintaan', 'pengaduan'],
+      pieColumns: ['informasi', 'permintaan', 'pengaduan'],
+      isSynced: true,
     };
     setDynamicCharts([...dynamicCharts, newChart]);
     setActiveMainTab('custom-charts');
@@ -127,10 +212,20 @@ export default function App() {
     setDynamicCharts(dynamicCharts.filter(c => c.id !== chartId));
   };
 
-  // Navigation order state for moveable/draggable nav items
+  // Navigation order state for moveable/draggable nav items (Analytics menu is hidden)
   const [navOrder, setNavOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem('sidebar_nav_order');
-    return saved ? JSON.parse(saved) : ['map', 'analytics', 'custom-charts'];
+    const defaultOrder = ['map', 'custom-charts'];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const filtered = parsed.filter((key: string) => key !== 'analytics' && key !== 'tickets');
+        return filtered.length > 0 ? filtered : defaultOrder;
+      } catch (e) {
+        console.error('Failed to parse sidebar nav order', e);
+      }
+    }
+    return defaultOrder;
   });
 
   useEffect(() => {
@@ -213,6 +308,8 @@ export default function App() {
 
           if (mappedCities.length > 0) {
             setCitiesData(mappedCities);
+            localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mappedCities));
+            localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mappedCities));
           }
         }
       } else {
@@ -243,6 +340,8 @@ export default function App() {
             };
           });
           setCitiesData(mappedCities);
+          localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mappedCities));
+          localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mappedCities));
         }
       }
 
@@ -316,17 +415,16 @@ export default function App() {
         <div className="p-6 border-b border-slate-800">
           <h1 className="text-xl font-bold tracking-tight text-blue-400 flex items-center gap-2">
             <LayoutDashboard className="h-5 w-5 text-blue-400" />
-            SIPL Monitor
+            <span>PETA</span>
           </h1>
-          <p className="text-[10px] uppercase tracking-widest text-slate-400 mt-1">Sistem Informasi & SLA</p>
+          <p className="text-xs uppercase tracking-widest text-slate-300 font-semibold mt-1">Pemanfaatan Data</p>
         </div>
         
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navOrder.map((tabKey, idx) => {
+          {navOrder.filter(k => k !== 'analytics' && k !== 'tickets').map((tabKey, idx, arr) => {
             const isMap = tabKey === 'map';
-            const isAnalytics = tabKey === 'analytics';
             const isActive = activeMainTab === tabKey;
-            const label = isMap ? 'Pemetaan Geo' : isAnalytics ? 'Analitik Performa' : `Konfigurasi Chart (${dynamicCharts.length})`;
+            const label = isMap ? 'Pemetaan Geo' : `Konfigurasi Chart (${dynamicCharts.length})`;
 
             return (
               <div
@@ -358,12 +456,12 @@ export default function App() {
                   </button>
                   <button
                     title="Geser ke bawah"
-                    disabled={idx === navOrder.length - 1}
+                    disabled={idx === arr.length - 1}
                     onClick={(e) => {
                       e.stopPropagation();
                       moveNavItem(idx, 'down');
                     }}
-                    className={`p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white ${idx === navOrder.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                    className={`p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white ${idx === arr.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
                   >
                     <ChevronDown className="h-3.5 w-3.5" />
                   </button>
@@ -374,13 +472,55 @@ export default function App() {
         </nav>
 
         <div className="p-4 border-t border-slate-800">
-          <div className="flex items-center space-x-3 bg-slate-800 p-3 rounded-xl">
-            <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center font-bold text-white">A</div>
-            <div>
-              <p className="text-xs font-semibold text-white">Admin Pusat</p>
-              <p className="text-[10px] text-slate-400">Kementerian Infokom</p>
+          {isAdmin ? (
+            <div className="bg-slate-800/90 border border-slate-700/80 p-3 rounded-xl flex items-center justify-between gap-2.5">
+              <div className="flex items-center space-x-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center font-black text-white shrink-0 shadow-xs text-xs">
+                  S
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1">
+                    <p className="text-xs font-bold text-white truncate">senada</p>
+                    <span className="text-[9px] bg-blue-500/30 text-blue-300 font-extrabold px-1.5 py-0.2 rounded">Admin</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 truncate">Akses Penuh (Full Control)</p>
+                </div>
+              </div>
+
+              <button
+                onClick={handleAdminLogout}
+                className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-700/60 rounded-lg transition-colors cursor-pointer"
+                title="Keluar / Logout (Beralih ke Mode Tamu)"
+                id="admin-logout-button"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
             </div>
-          </div>
+          ) : (
+            <div className="bg-slate-800/60 border border-slate-700/50 p-3 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-slate-700 flex items-center justify-center text-slate-300 shrink-0">
+                    <Shield className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-200 truncate">Mode Tamu</p>
+                    <p className="text-[10px] text-slate-400 truncate">Hanya Melihat (View Only)</p>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsLoginModalOpen(true)}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                id="admin-login-button"
+                title="Masuk sebagai Administrator"
+              >
+                <LogIn className="h-3.5 w-3.5" />
+                <span>Login Admin</span>
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -391,7 +531,7 @@ export default function App() {
         <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-bold text-slate-800">
-              {activeMainTab === 'map' ? 'Overview Layanan Nasional (Peta)' :
+              {activeMainTab === 'map' ? 'PETA LAYANAN SENADA' :
                activeMainTab === 'tickets' ? 'Antrean Laporan & SLA Tindaklanjut' :
                activeMainTab === 'analytics' ? 'Analitik Performa Layanan Bulanan' : 'Visualisasi Grafik Kustom Dinamis'}
             </h2>
@@ -425,7 +565,7 @@ export default function App() {
               <span>{showCopyNotification ? 'Link Tersalin!' : 'Bagikan Link'}</span>
             </button>
 
-            {/* AUTO SYNC GOOGLE SHEET CONTROL GROUP */}
+              {/* AUTO SYNC GOOGLE SHEET CONTROL GROUP */}
             <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 p-1 rounded-xl shadow-3xs">
               <div className="flex items-center gap-1 pl-1.5 pr-0.5">
                 <Clock className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
@@ -433,9 +573,10 @@ export default function App() {
                 <select
                   value={syncInterval}
                   onChange={(e) => setSyncInterval(e.target.value as any)}
-                  className="bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-3xs"
+                  disabled={!isAdmin}
+                  className="bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-3xs disabled:opacity-60"
                   id="auto-sync-interval-select"
-                  title="Pilih Waktu Auto Sync dengan Google Sheet"
+                  title={isAdmin ? "Pilih Waktu Auto Sync dengan Google Sheet" : "Login Admin untuk mengubah waktu auto sync"}
                 >
                   <option value="manual">Sync Manual</option>
                   <option value="15m">15 Menit</option>
@@ -446,16 +587,28 @@ export default function App() {
               </div>
 
               {/* TARGETED BUTTON ID */}
-              <button
-                onClick={() => handleExecuteSync()}
-                disabled={isRefreshing}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-50 cursor-pointer shadow-3xs"
-                id="simulate-data-refresh-button"
-                title={lastSyncedAt ? `Terakhir sinkronisasi: ${lastSyncedAt}` : 'Klik untuk Sinkronisasi Manual Google Sheet'}
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-                <span>{isRefreshing ? 'Sinkronisasi...' : 'Sync Sekarang'}</span>
-              </button>
+              {isAdmin ? (
+                <button
+                  onClick={() => handleExecuteSync()}
+                  disabled={isRefreshing}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-50 cursor-pointer shadow-3xs"
+                  id="simulate-data-refresh-button"
+                  title={lastSyncedAt ? `Terakhir sinkronisasi: ${lastSyncedAt}` : 'Klik untuk Sinkronisasi Manual Google Sheet'}
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  <span>{isRefreshing ? 'Sinkronisasi...' : 'Sync Sekarang'}</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => setIsLoginModalOpen(true)}
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-600 px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-3xs"
+                  id="simulate-data-refresh-button"
+                  title="Login Admin untuk Sinkronisasi Data"
+                >
+                  <Lock className="h-3.5 w-3.5 text-slate-500" />
+                  <span>Sync (Admin)</span>
+                </button>
+              )}
             </div>
           </div>
         </header>
@@ -532,6 +685,8 @@ export default function App() {
                 <IndonesiaMap
                   onCitiesDataChange={handleCitiesDataChange}
                   currentCities={citiesData}
+                  isAdmin={isAdmin}
+                  onRequestAdminLogin={() => setIsLoginModalOpen(true)}
                 />
               </div>
             )}
@@ -573,19 +728,32 @@ export default function App() {
                     </p>
                   </div>
 
-                  <button
-                    onClick={handleAddNewChart}
-                    className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-5 rounded-lg text-xs transition-colors shadow-sm shrink-0 flex items-center gap-1.5 cursor-pointer"
-                    id="add-new-chart-inner-button"
-                  >
-                    <PlusCircle className="h-4 w-4" />
-                    Tambah Grafik Baru
-                  </button>
+                  {isAdmin ? (
+                    <button
+                      onClick={handleAddNewChart}
+                      className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-5 rounded-lg text-xs transition-colors shadow-sm shrink-0 flex items-center gap-1.5 cursor-pointer"
+                      id="add-new-chart-inner-button"
+                      title="Tambah Grafik Baru (Admin)"
+                    >
+                      <PlusCircle className="h-4 w-4" />
+                      Tambah Grafik Baru
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setIsLoginModalOpen(true)}
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2 px-5 rounded-lg text-xs transition-colors border border-slate-200 shadow-2xs shrink-0 flex items-center gap-1.5 cursor-pointer"
+                      id="add-new-chart-inner-button"
+                      title="Login Admin untuk Menambah Grafik"
+                    >
+                      <Lock className="h-3.5 w-3.5 text-slate-400" />
+                      Tambah Grafik (Admin)
+                    </button>
+                  )}
                 </div>
 
                 {/* DYNAMIC CHARTS BENTO GRID */}
                 {dynamicCharts.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="custom-charts-grid">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6" id="custom-charts-grid">
                     {dynamicCharts.map(chart => (
                       <DynamicChartItem
                         key={chart.id}
@@ -594,6 +762,10 @@ export default function App() {
                         onDelete={handleDeleteChart}
                         localMonthlyData={monthlyData}
                         localCitiesData={citiesData}
+                        onExecuteSync={() => handleExecuteSync()}
+                        isSyncing={isRefreshing}
+                        isAdmin={isAdmin}
+                        onRequestAdminLogin={() => setIsLoginModalOpen(true)}
                       />
                     ))}
                   </div>
@@ -622,6 +794,13 @@ export default function App() {
 
         </div>
       </main>
+
+      {/* ADMIN AUTHENTICATION LOGIN MODAL */}
+      <AdminLoginModal
+        isOpen={isLoginModalOpen}
+        onClose={() => setIsLoginModalOpen(false)}
+        onLoginSuccess={handleAdminLoginSuccess}
+      />
 
     </div>
   );

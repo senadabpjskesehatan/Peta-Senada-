@@ -848,3 +848,67 @@ export function getIslandForCity(cityName: string, lat: number, lon: number): st
 
   return 'Lainnya';
 }
+
+// Categorize Indonesian City / KC into proper Kedeputian Wilayah (KEPWIL I - XI)
+export function getKepwilForCity(cityName: string): string {
+  if (!cityName) return 'KEPWIL IV - DKI Jakarta & Banten';
+  const name = cityName.toLowerCase().trim();
+
+  // KEPWIL I: Aceh & Sumut
+  if (/aceh|sabang|lhokseumawe|langsa|meulaboh|medan|binjai|tebing|siantar|pematangsiantar|tanjungbalai|sibolga|padangsidimpuan|gunungsitoli|deli|karo|asahan|labuhanbatu|nias|tapanuli|simalungun|dairi|pakpak|humbang|samosir|batubara|toba/i.test(name)) {
+    return 'KEPWIL I - Aceh & Sumatera Utara';
+  }
+
+  // KEPWIL II: Sumbar, Riau, Kepri, Jambi
+  if (/padang|bukittinggi|payakumbuh|pariaman|solok|sawahlunto|pasaman|sijunjung|dharmasraya|pekanbaru|dumai|duri|bengkalis|tembilahan|rengat|siak|kampar|pelalawan|rokan|kuansing|batam|tanjungpinang|karimun|natuna|anambas|lingga|jambi|sungai penuh|bungo|merangin|sarolangun|kerinci|batanghari|muaro jambi|tanjung jabung/i.test(name)) {
+    return 'KEPWIL II - Riau, Kepri, Sumbar & Jambi';
+  }
+
+  // KEPWIL III: Sumsel, Babel, Bengkulu, Lampung
+  if (/palembang|prabumulih|pagar alam|lubuklinggau|baturaja|lahat|muara enim|sekayu|ogan|banyuasin|empat lawang|penukal|musirawas|bengkulu|curup|manna|mukomuko|rejang|lebong|kaur|seluma|lampung|bandar lampung|metro|kotabumi|kalianda|pringsewu|mesuji|tulang bawang|tanggamus|pesawaran|way kanan|pangkal|bangka|belitung|tobali|muntok/i.test(name)) {
+    return 'KEPWIL III - Sumsel, Babel, Bengkulu & Lampung';
+  }
+
+  // KEPWIL IV: DKI Jakarta & Banten
+  if (/jakarta|seribu|gambir|kebayoran|rawamangun|jatinegara|tanah abang|priok|grogol|cilandak|tangerang|tangsel|bsd|serang|cilegon|pandeglang|lebak|rangkasbitung|tigaraksa/i.test(name)) {
+    return 'KEPWIL IV - DKI Jakarta & Banten';
+  }
+
+  // KEPWIL V: Jawa Barat
+  if (/bandung|cimahi|soreang|ngamprah|padalarang|bogor|cibinong|depok|bekasi|cikarang|sukabumi|cianjur|karawang|purwakarta|subang|sumedang|garut|tasikmalaya|ciamis|banjar|pangandaran|cirebon|kuningan|majalengka|indramayu/i.test(name)) {
+    return 'KEPWIL V - Jawa Barat';
+  }
+
+  // KEPWIL VI: Jawa Tengah & D.I. Yogyakarta
+  if (/semarang|salatiga|kendal|demak|kudus|jepara|pati|rembang|blora|grobogan|purwodadi|pekalongan|batang|pemalang|tegal|brebes|solo|surakarta|boyolali|klaten|sukoharjo|wonogiri|karanganyar|sragen|magelang|temanggung|wonosobo|purworejo|kebumen|purwokerto|banyumas|cilacap|purbalingga|banjarnegara|yogyakarta|jogja|sleman|bantul|kulon progo|wates|gunungkidul|wonosari/i.test(name)) {
+    return 'KEPWIL VI - Jawa Tengah & D.I. Yogyakarta';
+  }
+
+  // KEPWIL VII: Jawa Timur
+  if (/surabaya|sidoarjo|gresik|mojokerto|jombang|bojonegoro|tuban|lamongan|madiun|magetan|ngawi|ponorogo|pacitan|kediri|nganjuk|blitar|tulungagung|trenggalek|malang|batu|pasuruan|probolinggo|lumajang|bondowoso|situbondo|jember|banyuwangi|bangkalan|sampang|pamekasan|sumenep/i.test(name)) {
+    return 'KEPWIL VII - Jawa Timur';
+  }
+
+  // KEPWIL VIII: Bali & Nusa Tenggara (NTB, NTT)
+  if (/denpasar|singaraja|buleleng|tabanan|gianyar|ubud|klungkung|semarapura|bangli|karangasem|amlapura|negara|jembrana|badung|mangupura|kuta|mataram|lombok|praya|selong|gerung|sumbawa|taliwang|dompu|bima|raba|kupang|soe|kefamenanu|atambua|belu|kalabahi|alor|larantuka|lewoleba|lembata|maumere|sikka|ende|bajawa|ngada|mbay|nagekeo|ruteng|manggarai|borong|labuan bajo|waingapu|sumba|waikabubak|tambolaka|baa|rote|sabu|malaka/i.test(name)) {
+    return 'KEPWIL VIII - Bali & Nusa Tenggara';
+  }
+
+  // KEPWIL IX: Kalimantan
+  if (/pontianak|singkawang|sambas|bengkayang|landak|sanggau|sekadau|sintang|kapuas|putussibau|ketapang|sukadana|mempawah|kubu raya|palangka|palangkaraya|pangkalan bun|sampit|buntok|muara teweh|katingan|seruyan|sukamara|lamandau|pulang pisau|murung raya|barito|banjarmasin|banjarbaru|martapura|pelaihari|batulicin|kotabaru|marabahan|tapin|kandangan|barabai|amuntai|balangan|tabalong|samarinda|balikpapan|bontang|tenggarong|kukar|kutai|sendawar|sangatta|berau|penajam|ppu|paser|nusantara|ikn|tanjung selor|bulungan|tarakan|malinau|nunukan|tana tidung/i.test(name)) {
+    return 'KEPWIL IX - Kalimantan';
+  }
+
+  // KEPWIL X: Sulawesi & Maluku Utara
+  if (/makassar|gowa|takalar|jeneponto|bantaeng|bulukumba|selayar|sinjai|maros|pangkep|barru|parepare|bone|watampone|soppeng|wajo|sengkang|sidrap|pinrang|enrekang|palopo|luwu|masamba|malili|toraja|manado|bitung|tomohon|kotamobagu|minahasa|sangihe|talaud|sitaro|palu|donggala|sigi|parigi|poso|ampana|tojo una-una|tolitoli|buol|luwuk|banggai|morowali|kendari|baubau|bau-bau|kolaka|konawe|muna|buton|wakatobi|bombana|gorontalo|limboto|bone bolango|kwandang|boalemo|pohuwato|mamuju|tobadak|pasangkayu|polman|polewali|majene|mamasa|ternate|tidore|jailolo|weda|maba|labuha|tobelo|sanana|daruba|morotai|bobong/i.test(name)) {
+    return 'KEPWIL X - Sulawesi & Maluku Utara';
+  }
+
+  // KEPWIL XI: Papua & Maluku
+  if (/ambon|tual|masohi|langgur|saumlaki|tanimbar|namlea|buru|namrole|dobo|aru|piru|bula|tiakur|jayapura|sentani|sarmi|keerom|biak|supiori|serui|yapen|waropen|manokwari|ransiki|anggi|arfak|bintuni|rasiei|wondama|kaimana|fakfak|fak-fak|sorong|aimas|teminabuan|waisai|raja ampat|kumurkek|maybrat|merauke|tanah merah|boven digoel|kepi|mappi|agats|asmat|nabire|paniai|enarotali|timika|mimika|wamena|jayawijaya|oksibil|dekai|yahukimo|tolikara|karubaga|intan jaya|deiyai|dogiyai|punca|nduga|yalimo|mamberamo/i.test(name)) {
+    return 'KEPWIL XI - Papua & Maluku';
+  }
+
+  return 'KEPWIL IV - DKI Jakarta & Banten';
+}
+

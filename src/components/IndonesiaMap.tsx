@@ -1,23 +1,33 @@
-import { useState, useMemo, ChangeEvent, useEffect, useRef } from 'react';
-import { MapPin, RotateCw, Database, FileSpreadsheet, AlertCircle, CheckCircle, HelpCircle, X, Info, ArrowUpRight, Award, UploadCloud, Globe, FileUp, SlidersHorizontal, Layers, Table, Settings2, Save, Compass, Maximize2, Minimize2, Map as MapIcon, Eye, Search, Trophy, TrendingDown } from 'lucide-react';
+import React, { useState, useMemo, ChangeEvent, useEffect, useRef } from 'react';
+import { MapPin, RotateCw, Database, FileSpreadsheet, AlertCircle, CheckCircle, CheckCircle2, HelpCircle, X, Info, ArrowUpRight, Award, UploadCloud, Globe, FileUp, SlidersHorizontal, Layers, Table, Settings2, Save, Compass, Maximize2, Minimize2, Map as MapIcon, Eye, Search, Trophy, TrendingDown, Calendar, Landmark, Building2, Filter, RotateCcw, Sparkles, ChevronUp, ChevronDown } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { CityData, MapSyncConfig } from '../types';
+import { CityData, MapSyncConfig, FilterReference } from '../types';
 import { fetchSheetData, extractSpreadsheetId, parseCSV, parseNumericValue } from '../utils/sheetParser';
+import { parseMonthValue, formatMonthToMM, formatMonthDisplay, isBulanMatching, isKepwilMatching, isKantorCabangMatching, INDONESIAN_MONTH_NAMES } from '../utils/monthHelper';
 import { DEFAULT_CITIES, SAMPLE_SHEETS_CSV } from '../data/defaultData';
-import { INDONESIAN_CITIES_COORDINATES, findCityCoordinates, getIslandForCity } from '../data/indonesiaCoordinates';
+import { INDONESIAN_CITIES_COORDINATES, findCityCoordinates, getIslandForCity, getKepwilForCity } from '../data/defaultData';
+import SearchableFilterSelect, { SearchableOptionGroup } from './SearchableFilterSelect';
 import { saveMapDataToCloud, saveAppSettingsToCloud } from '../lib/firebase';
 
 interface IndonesiaMapProps {
-  onCitiesDataChange: (cities: CityData[]) => void;
+  onCitiesDataChange: (cities: CityData[], updatedConfig?: MapSyncConfig) => void;
   currentCities: CityData[];
   isAdmin?: boolean;
   onRequestAdminLogin?: () => void;
   volumeThresholds?: { rendahMax: number; sedangMax: number; tinggiMax: number };
   onVolumeThresholdsChange?: (thresholds: { rendahMax: number; sedangMax: number; tinggiMax: number }) => void;
+  syncConfig?: MapSyncConfig;
+  onSyncConfigChange?: (cfg: MapSyncConfig) => void;
+  selectedBulan?: string;
+  onSelectedBulanChange?: (bulan: string) => void;
+  selectedKepwil?: string;
+  onSelectedKepwilChange?: (kepwil: string) => void;
+  selectedKantorCabang?: string;
+  onSelectedKantorCabangChange?: (kc: string) => void;
+  filterReferences?: FilterReference[];
 }
-
 
 export default function IndonesiaMap({ 
   onCitiesDataChange, 
@@ -25,18 +35,57 @@ export default function IndonesiaMap({
   isAdmin = false, 
   onRequestAdminLogin,
   volumeThresholds: propVolumeThresholds,
-  onVolumeThresholdsChange
+  onVolumeThresholdsChange,
+  syncConfig: propSyncConfig,
+  onSyncConfigChange,
+  selectedBulan: propSelectedBulan,
+  onSelectedBulanChange,
+  selectedKepwil: propSelectedKepwil,
+  onSelectedKepwilChange,
+  selectedKantorCabang: propSelectedKantorCabang,
+  onSelectedKantorCabangChange,
+  filterReferences = [],
 }: IndonesiaMapProps) {
-  const [syncConfig, setSyncConfig] = useState<MapSyncConfig>({
-    sheetUrl: '',
-    sheetId: '',
-    cityColumn: '', // This will hold the KC column mapping
-    informasiColumn: '',
-    permintaanColumn: '',
-    pengaduanColumn: '',
-    slaColumn: '',
-    isSynced: false,
+  const [syncConfig, setSyncConfigState] = useState<MapSyncConfig>(() => {
+    if (propSyncConfig && propSyncConfig.sheetUrl) return propSyncConfig;
+    try {
+      const saved = localStorage.getItem('map_sync_config');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return {
+      sheetUrl: '',
+      sheetId: '',
+      cityColumn: '', // This will hold the KC column mapping
+      informasiColumn: '',
+      permintaanColumn: '',
+      pengaduanColumn: '',
+      slaColumn: '',
+      isSynced: false,
+    };
   });
+
+  const setSyncConfig = (newCfg: MapSyncConfig | ((prev: MapSyncConfig) => MapSyncConfig)) => {
+    setSyncConfigState((prev) => {
+      const updated = typeof newCfg === 'function' ? newCfg(prev) : newCfg;
+      try {
+        localStorage.setItem('map_sync_config', JSON.stringify(updated));
+      } catch (e) {}
+      
+      // Defer the parent component update to avoid "Cannot update a component while rendering"
+      // since React evaluates state updater functions during the render phase.
+      setTimeout(() => {
+        onSyncConfigChange?.(updated);
+      }, 0);
+      
+      return updated;
+    });
+  };
+
+  useEffect(() => {
+    if (propSyncConfig && propSyncConfig.sheetUrl && propSyncConfig.sheetUrl !== syncConfig.sheetUrl) {
+      setSyncConfigState(propSyncConfig);
+    }
+  }, [propSyncConfig]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -81,6 +130,12 @@ export default function IndonesiaMap({
   // Search query state for KC or Region search
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Column mapping modal state (for selecting which column serves as the reference for each filter & metric)
+  const [isColumnMappingModalOpen, setIsColumnMappingModalOpen] = useState(false);
+
+  // Dynamic filter states based on Reference Manager
+  const [dynamicFilterStates, setDynamicFilterStates] = useState<Record<string, string>>({});
+
   // Default selected city is Jakarta (first entry in default cities)
   const [selectedCityId, setSelectedCityId] = useState<string | null>('1');
 
@@ -90,6 +145,340 @@ export default function IndonesiaMap({
   // Ranking metric state for Top 10 & Bottom 10
   const [rankingMetric, setRankingMetric] = useState<'total' | 'informasi' | 'permintaan' | 'pengaduan' | 'slaCompliance'>('total');
 
+  // 3 Menu Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang)
+  const [internalBulan, setInternalBulan] = useState<string>('Semua');
+  const [internalKepwil, setInternalKepwil] = useState<string>('Semua');
+  const [internalKantorCabang, setInternalKantorCabang] = useState<string>('Semua');
+
+  const selectedBulan = propSelectedBulan !== undefined ? propSelectedBulan : internalBulan;
+  const setSelectedBulan = (b: string) => {
+    setInternalBulan(b);
+    onSelectedBulanChange?.(b);
+  };
+
+  const selectedKepwil = propSelectedKepwil !== undefined ? propSelectedKepwil : internalKepwil;
+  const setSelectedKepwil = (k: string) => {
+    setInternalKepwil(k);
+    onSelectedKepwilChange?.(k);
+  };
+
+  const selectedKantorCabang = propSelectedKantorCabang !== undefined ? propSelectedKantorCabang : internalKantorCabang;
+  const setSelectedKantorCabang = (kc: string) => {
+    setInternalKantorCabang(kc);
+    onSelectedKantorCabangChange?.(kc);
+  };
+
+  const [isFilterExpanded, setIsFilterExpanded] = useState<boolean>(true);
+
+  // Helper functions to safely extract Bulan, Kepwil, and Kantor Cabang across various formats
+  const getCityBulan = (c: CityData): string => {
+    let raw = '';
+    if (c.bulan && c.bulan.trim()) raw = c.bulan.trim();
+    else if (c.rawRow) {
+      if (syncConfig.bulanColumn && c.rawRow[syncConfig.bulanColumn] !== undefined) {
+        raw = String(c.rawRow[syncConfig.bulanColumn]).trim();
+      }
+      if (!raw) {
+        for (const [k, v] of Object.entries(c.rawRow)) {
+          if (/bulan|month|periode|bln/i.test(k.trim())) {
+            const val = String(v || '').trim();
+            if (val) {
+              raw = val;
+              break;
+            }
+          }
+        }
+      }
+    }
+    return raw;
+  };
+
+  const extractKepwilFromRawRow = (row: any): string => {
+    if (syncConfig.kepwilColumn && row[syncConfig.kepwilColumn] !== undefined) {
+      const v = String(row[syncConfig.kepwilColumn]).trim();
+      if (v) return v;
+    }
+    for (const [k, v] of Object.entries(row)) {
+      if (/^kepwil$/i.test(k.trim())) {
+        const val = String(v || '').trim();
+        if (val) return val;
+      }
+    }
+    for (const [k, v] of Object.entries(row)) {
+      if (/kepwil|kedeputian.*wilayah|kantor.*wilayah|wilayah|kanwil|regional/i.test(k.trim())) {
+        const val = String(v || '').trim();
+        if (val) return val;
+      }
+    }
+    return '';
+  };
+
+  const extractKCFromRawRow = (row: any): string => {
+    if (syncConfig.cityColumn && row[syncConfig.cityColumn] !== undefined) {
+      const v = String(row[syncConfig.cityColumn]).trim();
+      if (v) return v;
+    }
+    for (const [k, v] of Object.entries(row)) {
+      if (/^kantor cabang$|^kc$/i.test(k.trim())) {
+        const val = String(v || '').trim();
+        if (val) return val;
+      }
+    }
+    for (const [k, v] of Object.entries(row)) {
+      if (/kantor.*cabang|kc|cabang|kota|city|lokasi|daerah/i.test(k.trim())) {
+        const val = String(v || '').trim();
+        if (val) return val;
+      }
+    }
+    return '';
+  };
+
+  const getCityKepwil = (c: CityData): string => {
+    if (c.rawRow) {
+      const extracted = extractKepwilFromRawRow(c.rawRow);
+      if (extracted) return extracted;
+    }
+    if (c.kepwil && c.kepwil.trim()) return c.kepwil.trim();
+    return getKepwilForCity(c.kantorCabang || c.name || '');
+  };
+
+  const getCityKC = (c: CityData): string => {
+    if (c.rawRow) {
+      const extracted = extractKCFromRawRow(c.rawRow);
+      if (extracted) return extracted;
+    }
+    if (c.kantorCabang && c.kantorCabang.trim()) return c.kantorCabang.trim();
+    if (c.name && c.name.trim()) return c.name.trim();
+    return '';
+  };
+
+  // Comprehensive column list detected from loaded dataset (availableColumns, sheetRawRows, or current cities rawRows)
+  const detectedColumns = useMemo(() => {
+    const colSet = new Set<string>();
+    if (availableColumns && availableColumns.length > 0) {
+      availableColumns.forEach(c => colSet.add(c));
+    }
+    if (sheetRawRows && sheetRawRows.length > 0) {
+      sheetRawRows.forEach(row => {
+        if (row && typeof row === 'object') {
+          Object.keys(row).forEach(k => colSet.add(k));
+        }
+      });
+    }
+    if (currentCities && currentCities.length > 0) {
+      currentCities.forEach(c => {
+        if (c.rawRow && typeof c.rawRow === 'object') {
+          Object.keys(c.rawRow).forEach(k => colSet.add(k));
+        }
+      });
+    }
+    if (colSet.size === 0) {
+      return ['BULAN', 'KEPWIL', 'KANTOR CABANG', 'Layanan_Informasi', 'Permintaan_Informasi', 'Pengaduan', 'Kepatuhan_SLA'];
+    }
+    return Array.from(colSet);
+  }, [availableColumns, sheetRawRows, currentCities]);
+
+  // Extract up to 3 distinct sample preview values from a chosen column
+  const getColumnSampleValues = (colName: string): string[] => {
+    if (!colName) return [];
+    const samples = new Set<string>();
+    const rows = sheetRawRows.length > 0 ? sheetRawRows : currentCities.map(c => c.rawRow).filter(Boolean);
+    for (const r of rows) {
+      if (r && r[colName] !== undefined && r[colName] !== null) {
+        const val = String(r[colName]).trim();
+        if (val && !/^(total|jumlah|subtotal|average|rata-rata)$/i.test(val)) {
+          samples.add(val);
+          if (samples.size >= 3) break;
+        }
+      }
+    }
+    return Array.from(samples);
+  };
+
+  // Extract distinct Bulan values from current dataset & raw rows, converted to format 'mm' (e.g. '01 - Januari', '05 - Mei')
+  const availableBulanList = useMemo(() => {
+    const monthMap = new Map<string, { label: string; monthIndex: number }>();
+
+    const processRawBulan = (raw: string) => {
+      if (!raw) return;
+      const parsed = parseMonthValue(raw);
+      if (parsed) {
+        if (!monthMap.has(parsed.label)) {
+          monthMap.set(parsed.label, {
+            label: parsed.label,
+            monthIndex: parsed.monthIndex,
+          });
+        }
+      } else if (!monthMap.has(raw)) {
+        monthMap.set(raw, {
+          label: raw,
+          monthIndex: 99,
+        });
+      }
+    };
+
+    if (currentCities && currentCities.length > 0) {
+      currentCities.forEach(c => {
+        const b = getCityBulan(c);
+        if (b) processRawBulan(b);
+      });
+    }
+    if (sheetRawRows && sheetRawRows.length > 0) {
+      sheetRawRows.forEach(row => {
+        for (const [k, v] of Object.entries(row)) {
+          if (/bulan|month|periode|bln/i.test(k.trim())) {
+            const val = String(v || '').trim();
+            if (val) processRawBulan(val);
+          }
+        }
+      });
+    }
+
+    if (monthMap.size === 0) {
+      return [
+        '01 - Januari', '02 - Februari', '03 - Maret', '04 - April',
+        '05 - Mei', '06 - Juni', '07 - Juli', '08 - Agustus',
+        '09 - September', '10 - Oktober', '11 - November', '12 - Desember'
+      ];
+    }
+
+    const sorted = Array.from(monthMap.values()).sort((a, b) => {
+      if (a.monthIndex !== b.monthIndex) return a.monthIndex - b.monthIndex;
+      return a.label.localeCompare(b.label, undefined, { numeric: true });
+    });
+
+    return sorted.map(m => m.label);
+  }, [currentCities, sheetRawRows, syncConfig.bulanColumn]);
+
+  // Extract distinct KEPWIL values from current dataset & raw rows
+  const availableKepwilList = useMemo(() => {
+    const set = new Set<string>();
+    if (currentCities && currentCities.length > 0) {
+      currentCities.forEach(c => {
+        const rowBulan = getCityBulan(c);
+        if (selectedBulan !== 'Semua' && !isBulanMatching(rowBulan, selectedBulan)) {
+          return;
+        }
+        const kw = getCityKepwil(c);
+        if (kw) set.add(kw);
+      });
+    }
+    if (sheetRawRows && sheetRawRows.length > 0) {
+      sheetRawRows.forEach(row => {
+        let rowBulan = '';
+        for (const [k, v] of Object.entries(row)) {
+          if (/bulan|month|periode|bln/i.test(k.trim())) {
+            rowBulan = String(v || '').trim();
+            break;
+          }
+        }
+        if (selectedBulan !== 'Semua' && !isBulanMatching(rowBulan, selectedBulan)) {
+          return;
+        }
+        let kwFound = false;
+        if (syncConfig.kepwilColumn && row[syncConfig.kepwilColumn] !== undefined) {
+          const val = String(row[syncConfig.kepwilColumn]).trim();
+          if (val) { set.add(val); kwFound = true; }
+        }
+        if (!kwFound) {
+          for (const [k, v] of Object.entries(row)) {
+            if (/^kepwil$/i.test(k.trim())) {
+              const val = String(v || '').trim();
+              if (val) { set.add(val); kwFound = true; break; }
+            }
+          }
+        }
+        if (!kwFound) {
+          for (const [k, v] of Object.entries(row)) {
+            if (/kepwil|kedeputian.*wilayah|kantor.*wilayah|wilayah|kanwil|regional/i.test(k.trim())) {
+              const val = String(v || '').trim();
+              if (val) { set.add(val); break; }
+            }
+          }
+        }
+      });
+    }
+
+    const result = Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    if (result.length === 0) {
+      return [
+        'KEPWIL I - Aceh & Sumatera Utara',
+        'KEPWIL II - Riau, Kepri, Sumbar & Jambi',
+        'KEPWIL III - Sumsel, Babel, Bengkulu & Lampung',
+        'KEPWIL IV - DKI Jakarta & Banten',
+        'KEPWIL V - Jawa Barat',
+        'KEPWIL VI - Jawa Tengah & D.I. Yogyakarta',
+        'KEPWIL VII - Jawa Timur',
+        'KEPWIL VIII - Bali & Nusa Tenggara',
+        'KEPWIL IX - Kalimantan',
+        'KEPWIL X - Sulawesi & Maluku Utara',
+        'KEPWIL XI - Papua & Maluku',
+      ];
+    }
+
+    return result;
+  }, [currentCities, sheetRawRows, syncConfig.kepwilColumn, syncConfig.bulanColumn, selectedBulan]);
+
+  // Extract Kantor Cabang grouped strictly by KEPWIL from the dataset reference
+  const { availableKantorCabangList, groupedKantorCabang } = useMemo(() => {
+    const groupsMap = new Map<string, Set<string>>();
+    const allKCSet = new Set<string>();
+
+    if (currentCities && currentCities.length > 0) {
+      currentCities.forEach(c => {
+        const rowBulan = getCityBulan(c);
+        if (selectedBulan !== 'Semua' && !isBulanMatching(rowBulan, selectedBulan)) {
+          return;
+        }
+
+        const rowKepwil = getCityKepwil(c) || 'Lainnya';
+        const kc = getCityKC(c);
+        if (!kc) return;
+
+        if (!groupsMap.has(rowKepwil)) {
+          groupsMap.set(rowKepwil, new Set<string>());
+        }
+        groupsMap.get(rowKepwil)!.add(kc);
+
+        if (selectedKepwil === 'Semua' || isKepwilMatching(rowKepwil, selectedKepwil)) {
+          allKCSet.add(kc);
+        }
+      });
+    }
+
+    // Build grouped structures for dropdown
+    const grouped: SearchableOptionGroup[] = [];
+    const sortedGroupNames = Array.from(groupsMap.keys()).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+
+    sortedGroupNames.forEach(groupName => {
+      // If a KEPWIL is selected in filter 2, only include that specific group
+      if (selectedKepwil !== 'Semua' && !isKepwilMatching(groupName, selectedKepwil)) {
+        return;
+      }
+      const items = Array.from(groupsMap.get(groupName) || []).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true })
+      );
+      if (items.length > 0) {
+        grouped.push({
+          groupName,
+          items,
+        });
+      }
+    });
+
+    const flatList = Array.from(allKCSet).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+
+    return {
+      availableKantorCabangList: flatList,
+      groupedKantorCabang: grouped,
+    };
+  }, [currentCities, syncConfig, selectedBulan, selectedKepwil]);
+
   // Aggregate and deduplicate KC data by unique Kantor Cabang name using SUM formula and accurate GPS coordinates
   const uniqueCities = useMemo(() => {
     if (!currentCities || currentCities.length === 0) return [];
@@ -97,18 +486,39 @@ export default function IndonesiaMap({
     const map: Record<string, {
       id: string;
       name: string;
+      kantorCabang?: string;
+      kepwil?: string;
+      bulan?: string;
       latitude: number;
       longitude: number;
       informasi: number;
       permintaan: number;
       pengaduan: number;
+      total: number;
       slaSum: number;
       count: number;
+      rawRow?: any;
     }> = {};
 
     currentCities.forEach(c => {
-      if (!c.name) return;
-      const cleanKey = c.name.toLowerCase().trim();
+      const rowBulan = getCityBulan(c);
+      const rowKepwil = getCityKepwil(c);
+      const rowKC = getCityKC(c);
+
+      // Check 3 filters: Bulan (with format conversion support), KEPWIL, Kantor Cabang
+      if (selectedBulan !== 'Semua' && !isBulanMatching(rowBulan, selectedBulan)) {
+        return;
+      }
+      if (selectedKepwil !== 'Semua' && !isKepwilMatching(rowKepwil, selectedKepwil)) {
+        return;
+      }
+      if (selectedKantorCabang !== 'Semua' && !isKantorCabangMatching(rowKC, selectedKantorCabang)) {
+        return;
+      }
+
+      const cleanKC = rowKC || c.name;
+      if (!cleanKC) return;
+      const cleanKey = cleanKC.toLowerCase().trim();
 
       const infoVal = parseNumericValue(c.informasi);
       const permVal = parseNumericValue(c.permintaan);
@@ -116,40 +526,52 @@ export default function IndonesiaMap({
       const slaVal = parseNumericValue(c.slaCompliance) || 90;
 
       // Always resolve accurate geographic coordinates for Indonesian cities & KC
-      const resolved = findCityCoordinates(c.name);
+      const resolved = findCityCoordinates(cleanKC);
       const lat = (resolved && resolved.lat !== 0) ? resolved.lat : (c.latitude || -6.2088);
       const lon = (resolved && resolved.lon !== 0) ? resolved.lon : (c.longitude || 106.8456);
 
       if (!map[cleanKey]) {
         map[cleanKey] = {
           id: c.id,
-          name: c.name,
+          name: cleanKC,
+          kantorCabang: rowKC,
+          kepwil: rowKepwil,
+          bulan: rowBulan,
           latitude: lat,
           longitude: lon,
           informasi: 0,
           permintaan: 0,
           pengaduan: 0,
+          total: 0,
           slaSum: 0,
           count: 0,
+          rawRow: { ...(c.rawRow || {}) },
         };
+      } else if (c.rawRow) {
+        map[cleanKey].rawRow = { ...map[cleanKey].rawRow, ...c.rawRow };
       }
 
       // Rumus SUM per kategori layanan
       map[cleanKey].informasi += infoVal;
       map[cleanKey].permintaan += permVal;
       map[cleanKey].pengaduan += pengVal;
+      map[cleanKey].total += parseNumericValue(c.total) > 0 ? parseNumericValue(c.total) : (infoVal + permVal + pengVal);
       map[cleanKey].slaSum += slaVal;
       map[cleanKey].count += 1;
     });
 
     return Object.entries(map).map(([key, item], index) => {
-      const total = item.informasi + item.permintaan + item.pengaduan;
+      const calculatedTotal = item.informasi + item.permintaan + item.pengaduan;
+      const total = item.total > 0 ? item.total : calculatedTotal;
       const avgSla = item.count > 0 ? Math.round(item.slaSum / item.count) : 90;
       const slaCompliance = Math.min(100, Math.max(0, avgSla));
 
       return {
         id: item.id || `kc_uniq_${index}_${key.replace(/[^a-z0-9]/gi, '_')}`,
         name: item.name,
+        kantorCabang: item.kantorCabang,
+        kepwil: item.kepwil,
+        bulan: item.bulan,
         latitude: item.latitude,
         longitude: item.longitude,
         informasi: item.informasi,
@@ -158,9 +580,10 @@ export default function IndonesiaMap({
         total,
         avgSlaDays: 2.4,
         slaCompliance,
+        rawRow: item.rawRow,
       };
     });
-  }, [currentCities]);
+  }, [currentCities, selectedBulan, selectedKepwil, selectedKantorCabang, syncConfig]);
 
   // Compute Top 10 & Bottom 10 rankings
   const { top10, bottom10 } = useMemo(() => {
@@ -175,11 +598,35 @@ export default function IndonesiaMap({
     return { top10: top, bottom10: bottom };
   }, [uniqueCities, rankingMetric]);
 
-  // Filtered cities list based on search query and selected island (using unique KC list)
+  // Filtered cities list based on search query, selected island, and dynamic filter references
   const filteredCities = useMemo(() => {
     if (!uniqueCities) return [];
     const query = searchQuery.toLowerCase().trim();
+    
+    // 1. Get active dynamic filters for map
+    const activeFilters = filterReferences
+      .filter(ref => (ref.placements || []).includes('map'))
+      .filter(ref => {
+        const val = dynamicFilterStates[ref.id];
+        return val && val !== 'Semua';
+      });
+
     return uniqueCities.filter(c => {
+      // Check dynamic filters
+      for (const ref of activeFilters) {
+        const expectedVal = dynamicFilterStates[ref.id].toLowerCase();
+        let actualVal = '';
+        
+        // If rawRow exists, try to get the column value directly
+        if (c.rawRow && ref.columnName && c.rawRow[ref.columnName] !== undefined) {
+          actualVal = String(c.rawRow[ref.columnName]).toLowerCase().trim();
+        } 
+        
+        if (actualVal !== expectedVal) {
+          return false;
+        }
+      }
+
       const island = getIslandForCity(c.name, c.latitude, c.longitude);
       const matchesIsland = selectedIsland === 'Semua' || island === selectedIsland;
       const matchesSearch = !query || 
@@ -187,7 +634,7 @@ export default function IndonesiaMap({
         island.toLowerCase().includes(query);
       return matchesIsland && matchesSearch;
     });
-  }, [uniqueCities, selectedIsland, searchQuery]);
+  }, [uniqueCities, selectedIsland, searchQuery, dynamicFilterStates, filterReferences]);
 
   // Convert real lat/lon values to detailed 1000x400 map coordinate canvas
   const projectCoords = (lat: number, lon: number) => {
@@ -394,90 +841,200 @@ export default function IndonesiaMap({
   useEffect(() => {
     if (!leafletMapRef.current || !selectedCityId || mapStyle === 'svg') return;
     const city = uniqueCities.find(c => c.id === selectedCityId);
-    if (city) {
+    if (city && city.latitude && city.longitude) {
       leafletMapRef.current.flyTo([city.latitude, city.longitude], Math.max(leafletMapRef.current.getZoom(), 7), {
         duration: 0.8
       });
     }
   }, [selectedCityId, mapStyle, uniqueCities]);
 
+  // Auto pan/fly to selected KC or fit bounds to KEPWIL when dropdown filters change
+  useEffect(() => {
+    if (!leafletMapRef.current || mapStyle === 'svg') return;
+
+    if (selectedKantorCabang !== 'Semua' && uniqueCities.length > 0) {
+      const found = uniqueCities.find(c => (c.kantorCabang || c.name).toLowerCase() === selectedKantorCabang.toLowerCase()) || uniqueCities[0];
+      if (found && found.latitude && found.longitude) {
+        setSelectedCityId(found.id);
+        leafletMapRef.current.flyTo([found.latitude, found.longitude], 9, { duration: 1.2 });
+      }
+    } else if (selectedKepwil !== 'Semua' && uniqueCities.length > 0) {
+      const validPoints = uniqueCities.filter(c => c.latitude && c.longitude);
+      if (validPoints.length > 0) {
+        const bounds = L.latLngBounds(validPoints.map(c => [c.latitude, c.longitude]));
+        leafletMapRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 8 });
+      }
+    }
+  }, [selectedKantorCabang, selectedKepwil, uniqueCities, mapStyle]);
+
+  // Helper function to intelligently match column names by priority
+  const findColumnByPriority = (columns: string[], priorities: RegExp[]): string => {
+    for (const regex of priorities) {
+      const found = columns.find(c => regex.test(c.trim()));
+      if (found) return found;
+    }
+    return '';
+  };
+
   // Process rows into map points using current or updated config mappings
   const applyRowsWithConfig = (rows: any[], cfg: MapSyncConfig) => {
     if (!rows || rows.length === 0) return 0;
 
-    const matchedKC = cfg.cityColumn;
-    const matchedInfo = cfg.informasiColumn;
-    const matchedPermintaan = cfg.permintaanColumn;
-    const matchedPengaduan = cfg.pengaduanColumn;
-    const matchedSla = cfg.slaColumn;
+    const rowSample = rows[0] || {};
+    const rowKeys = Object.keys(rowSample);
 
-    // Grouping map to aggregate multiple rows for the same KC using SUM formula
-    const kcMap: Record<string, {
-      rawName: string;
-      latitude: number;
-      longitude: number;
-      informasi: number;
-      permintaan: number;
-      pengaduan: number;
-      slaSum: number;
-      count: number;
-    }> = {};
+    const findRowKey = (customName?: string, priorities?: RegExp[]) => {
+      if (customName) {
+        if (customName in rowSample) return customName;
+        const found = rowKeys.find(k => k.trim().toLowerCase() === customName.trim().toLowerCase());
+        if (found) return found;
+      }
+      if (priorities && priorities.length > 0) {
+        return findColumnByPriority(rowKeys, priorities);
+      }
+      return '';
+    };
 
-    rows.forEach((row, rowIdx) => {
-      const rawName = String(row[matchedKC] || '').trim();
-      if (!rawName) return;
+    const matchedBulan = findRowKey(cfg.bulanColumn, [
+      /^(bulan|month|periode|bln)$/i,
+      /^(bulan|month|periode|bln|tanggal|tgl|waktu|date)/i,
+      /(bulan|month|periode|bln)/i
+    ]);
+
+    const matchedKepwil = findRowKey(cfg.kepwilColumn, [
+      /^(kepwil|kedeputian\s*wilayah|kantor\s*wilayah|kanwil|regional)$/i,
+      /(kepwil|kedeputian\s*wilayah|kantor\s*wilayah|kanwil|regional)/i,
+      /^(wilayah)$/i,
+      /(wilayah)/i
+    ]);
+
+    // Match Kantor Cabang specifically avoiding columns matched to Kepwil
+    const matchedKC = findRowKey(cfg.cityColumn, [
+      /^(nama\s*)?(kantor\s*cabang|kc)$/i,
+      /(kantor\s*cabang|kc\b|nama\s*kc|nama\s*cabang)/i,
+      /^(cabang|nama\s*kantor)$/i,
+      /^(kota|kabupaten|nama\s*kota|nama\s*kabupaten|daerah|lokasi)$/i,
+      /(cabang|kota|kabupaten|lokasi)/i
+    ]) || rowKeys.find(k => k !== matchedBulan && k !== matchedKepwil && !/no|nomor|id|total|jumlah|sla/i.test(k)) || rowKeys[0] || '';
+
+    const matchedInfo = findRowKey(cfg.informasiColumn, [
+      /^(layanan\s*informasi|informasi|pemberian\s*informasi|info)$/i,
+      /(layanan\s*informasi|informasi\b|info\b)/i
+    ]);
+
+    const matchedPermintaan = findRowKey(cfg.permintaanColumn, [
+      /^(permintaan\s*informasi|permintaan\s*tindakan|layanan\s*permintaan|permintaan|tindakan)$/i,
+      /(permintaan|tindakan|minta)/i
+    ]);
+
+    const matchedPengaduan = findRowKey(cfg.pengaduanColumn, [
+      /^(pengaduan\s*peserta|layanan\s*pengaduan|pengaduan|aduan|komplain|keluhan)$/i,
+      /(pengaduan|aduan|komplain|keluhan)/i
+    ]);
+
+    const matchedTotal = findRowKey(undefined, [
+      /^(total\s*layanan|total\s*tiket|total\s*permohonan|total|jumlah|grand\s*total)$/i,
+      /(total|jumlah)/i
+    ]);
+
+    const matchedSla = findRowKey(cfg.slaColumn, [
+      /^(kepatuhan\s*sla|persen\s*sla|sla\s*\(%\)|%\s*sla|sla\s*compliance|rata-rata\s*sla|sla)$/i,
+      /(sla|compliance|kepatuhan|persen|percent)/i
+    ]);
+
+    const syncedCities: CityData[] = rows.map((row, rowIdx) => {
+      let rawName = String(row[matchedKC] || '').trim();
+      
+      // Fallback: search row for any non-numeric string cell that isn't month or kepwil
+      if (!rawName) {
+        for (const [k, v] of Object.entries(row)) {
+          if (typeof v === 'string' && v.trim() && !/^-?\d+([\.,]\d+)?$/.test(v.trim()) && k !== matchedBulan && k !== matchedKepwil) {
+            const cleanKey = k.toLowerCase().trim();
+            if (!/no|nomor|id|bulan|month|periode|bln|total|jumlah|sla|compliance|persen/i.test(cleanKey)) {
+              rawName = v.trim();
+              break;
+            }
+          }
+        }
+      }
+
+      const infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
+      const permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
+      const pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
+      const totalFromCol = matchedTotal && row[matchedTotal] !== undefined ? parseNumericValue(row[matchedTotal]) : 0;
+
+      if (!rawName) {
+        if (infoVal > 0 || permVal > 0 || pengVal > 0 || totalFromCol > 0) {
+          rawName = `Kantor Cabang ${rowIdx + 1}`;
+        } else {
+          return null; // Empty row
+        }
+      }
+
+      // Filter out footer summary rows like "TOTAL", "JUMLAH", "GRAND TOTAL", etc.
+      const rawNameLower = rawName.toLowerCase();
+      if (/^(total|jumlah|grand\s*total|subtotal|rata-rata|average|all|rekap|keseluruhan|ringkasan)$/i.test(rawNameLower) ||
+          /^(total|jumlah|grand\s*total)\s*(layanan|kasus|berkas|tiket|keseluruhan|nasional)?$/i.test(rawNameLower)) {
+        return null;
+      }
+
+      let rawBulan = matchedBulan ? String(row[matchedBulan] || '').trim() : '';
+      if (!rawBulan) {
+        for (const [k, v] of Object.entries(row)) {
+          if (/bulan|month|periode|bln/i.test(k.trim())) {
+            const val = String(v || '').trim();
+            if (val) { rawBulan = val; break; }
+          }
+        }
+      }
+
+      let rawKepwil = matchedKepwil ? String(row[matchedKepwil] || '').trim() : '';
+      if (!rawKepwil) {
+        for (const [k, v] of Object.entries(row)) {
+          if (/kepwil|kedeputian|wilayah|kanwil/i.test(k.trim()) && !/cabang|kc/i.test(k.trim())) {
+            const val = String(v || '').trim();
+            if (val) { rawKepwil = val; break; }
+          }
+        }
+      }
+      if (!rawKepwil) {
+        rawKepwil = getKepwilForCity(rawName);
+      }
 
       const foundCoords = findCityCoordinates(rawName);
       // Ensure coordinates are valid land coordinates in Indonesia (defaulting to Jakarta inland if unknown)
       const coords = foundCoords || { lat: -6.2088, lon: 106.8456 };
 
-      const cleanKey = rawName.toLowerCase().trim();
-
-      const infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
-      const permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
-      const pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
-      const slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
-
-      if (!kcMap[cleanKey]) {
-        kcMap[cleanKey] = {
-          rawName,
-          latitude: coords.lat,
-          longitude: coords.lon,
-          informasi: 0,
-          permintaan: 0,
-          pengaduan: 0,
-          slaSum: 0,
-          count: 0,
-        };
+      let slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
+      if (slaVal > 0 && slaVal <= 1) {
+        slaVal = Number((slaVal * 100).toFixed(1));
+      } else if (slaVal > 100 && slaVal <= 10000) {
+        slaVal = Number((slaVal / 100).toFixed(1));
       }
+      
+      const calculatedTotal = infoVal + permVal + pengVal;
+      const total = totalFromCol > 0 ? totalFromCol : calculatedTotal;
 
-      // Rumus SUM per kategori layanan per Kantor Cabang unik
-      kcMap[cleanKey].informasi += infoVal;
-      kcMap[cleanKey].permintaan += permVal;
-      kcMap[cleanKey].pengaduan += pengVal;
-      kcMap[cleanKey].slaSum += slaVal;
-      kcMap[cleanKey].count += 1;
-    });
-
-    const syncedCities: CityData[] = Object.entries(kcMap).map(([key, item], index) => {
-      // Total layanan per kategori menggunakan rumus SUM
-      const total = item.informasi + item.permintaan + item.pengaduan;
-      const avgSla = item.count > 0 ? Math.round(item.slaSum / item.count) : 90;
-      const slaCompliance = Math.min(100, Math.max(0, avgSla));
+      const parsedBulan = parseMonthValue(rawBulan);
+      const normalizedBulan = parsedBulan ? parsedBulan.label : rawBulan;
 
       return {
-        id: `kc_unique_${index}_${key}`,
-        name: item.rawName,
-        latitude: item.latitude,
-        longitude: item.longitude,
-        informasi: item.informasi,
-        permintaan: item.permintaan,
-        pengaduan: item.pengaduan,
+        id: `row_${rowIdx}_${rawName.replace(/[^a-z0-9]/gi, '_')}`,
+        name: rawName,
+        kantorCabang: rawName,
+        bulan: normalizedBulan,
+        kepwil: rawKepwil,
+        latitude: coords.lat,
+        longitude: coords.lon,
+        informasi: infoVal,
+        permintaan: permVal,
+        pengaduan: pengVal,
         total,
         avgSlaDays: 2.4,
-        slaCompliance,
+        slaCompliance: slaVal,
+        rawRow: row,
       };
-    });
+    }).filter(Boolean) as CityData[];
 
     if (syncedCities.length > 0) {
       onCitiesDataChange(syncedCities);
@@ -487,7 +1044,19 @@ export default function IndonesiaMap({
       } catch (e) {
         console.error('Failed to save synced default cities', e);
       }
-      const updatedSyncCfg = { ...syncConfig, ...cfg, isSynced: true, lastSyncedAt: new Date().toLocaleTimeString() };
+      const updatedSyncCfg = { 
+        ...syncConfig, 
+        ...cfg, 
+        bulanColumn: matchedBulan,
+        kepwilColumn: matchedKepwil,
+        cityColumn: matchedKC,
+        informasiColumn: matchedInfo,
+        permintaanColumn: matchedPermintaan,
+        pengaduanColumn: matchedPengaduan,
+        slaColumn: matchedSla,
+        isSynced: true, 
+        lastSyncedAt: new Date().toLocaleTimeString('id-ID')
+      };
       setSyncConfig(updatedSyncCfg);
       saveMapDataToCloud(syncedCities, updatedSyncCfg);
       if (syncedCities[0]) {
@@ -506,8 +1075,18 @@ export default function IndonesiaMap({
     };
     setSyncConfig(updatedConfig);
 
-    if (sheetRawRows && sheetRawRows.length > 0) {
-      applyRowsWithConfig(sheetRawRows, updatedConfig);
+    const rowsToProcess = sheetRawRows.length > 0 ? sheetRawRows : currentCities.map(c => c.rawRow).filter(Boolean);
+    if (rowsToProcess && rowsToProcess.length > 0) {
+      applyRowsWithConfig(rowsToProcess, updatedConfig);
+    }
+  };
+
+  const handleResetColumnMappingToAuto = () => {
+    const rowsToProcess = sheetRawRows.length > 0 ? sheetRawRows : currentCities.map(c => c.rawRow).filter(Boolean);
+    if (rowsToProcess && rowsToProcess.length > 0 && detectedColumns.length > 0) {
+      autoSyncRowsAndColumns(rowsToProcess, detectedColumns);
+      setSuccessMsg('Acuan kolom berhasil diatur ulang ke deteksi otomatis!');
+      setTimeout(() => setSuccessMsg(null), 2500);
     }
   };
 
@@ -515,15 +1094,52 @@ export default function IndonesiaMap({
   const autoSyncRowsAndColumns = (rows: any[], columns: string[]) => {
     if (!rows || rows.length === 0 || !columns || columns.length === 0) return 0;
 
-    // Detect columns automatically
-    const matchedKC = columns.find(c => /kc|kantor.*cabang|cabang|kota|city|daerah|wilayah|lokasi|kabupaten|nama/i.test(c)) || columns[0] || '';
-    const matchedInfo = columns.find(c => /info|layanan.*info|informasi/i.test(c)) || '';
-    const matchedPermintaan = columns.find(c => /minta|layanan.*minta|permintaan|tindakan/i.test(c)) || '';
-    const matchedPengaduan = columns.find(c => /aduan|layanan.*aduan|pengaduan|komplain/i.test(c)) || '';
-    const matchedSla = columns.find(c => /sla|compliance|kepatuhan|persen|percent/i.test(c)) || '';
+    // Detect columns automatically with prioritized matching
+    const matchedBulan = findColumnByPriority(columns, [
+      /^(bulan|month|periode|bln)$/i,
+      /^(bulan|month|periode|bln|tanggal|tgl|waktu|date)/i,
+      /(bulan|month|periode|bln)/i
+    ]);
+
+    const matchedKepwil = findColumnByPriority(columns, [
+      /^(kepwil|kedeputian\s*wilayah|kantor\s*wilayah|kanwil|regional)$/i,
+      /(kepwil|kedeputian\s*wilayah|kantor\s*wilayah|kanwil|regional)/i,
+      /^(wilayah)$/i,
+      /(wilayah)/i
+    ]);
+
+    const matchedKC = findColumnByPriority(columns, [
+      /^(nama\s*)?(kantor\s*cabang|kc)$/i,
+      /(kantor\s*cabang|kc\b|nama\s*kc|nama\s*cabang)/i,
+      /^(cabang|nama\s*kantor)$/i,
+      /^(kota|kabupaten|nama\s*kota|nama\s*kabupaten|daerah|lokasi)$/i,
+      /(cabang|kota|kabupaten|lokasi)/i
+    ]) || columns.find(c => c !== matchedBulan && c !== matchedKepwil && !/no|nomor|id|total|jumlah|sla/i.test(c)) || columns[0] || '';
+
+    const matchedInfo = findColumnByPriority(columns, [
+      /^(layanan\s*informasi|informasi|pemberian\s*informasi|info)$/i,
+      /(layanan\s*informasi|informasi\b|info\b)/i
+    ]);
+
+    const matchedPermintaan = findColumnByPriority(columns, [
+      /^(permintaan\s*informasi|permintaan\s*tindakan|layanan\s*permintaan|permintaan|tindakan)$/i,
+      /(permintaan|tindakan|minta)/i
+    ]);
+
+    const matchedPengaduan = findColumnByPriority(columns, [
+      /^(pengaduan\s*peserta|layanan\s*pengaduan|pengaduan|aduan|komplain|keluhan)$/i,
+      /(pengaduan|aduan|komplain|keluhan)/i
+    ]);
+
+    const matchedSla = findColumnByPriority(columns, [
+      /^(kepatuhan\s*sla|persen\s*sla|sla\s*\(%\)|%\s*sla|sla\s*compliance|rata-rata\s*sla|sla)$/i,
+      /(sla|compliance|kepatuhan|persen|percent)/i
+    ]);
 
     const newCfg: MapSyncConfig = {
       ...syncConfig,
+      bulanColumn: matchedBulan,
+      kepwilColumn: matchedKepwil,
       cityColumn: matchedKC,
       informasiColumn: matchedInfo,
       permintaanColumn: matchedPermintaan,
@@ -760,6 +1376,7 @@ export default function IndonesiaMap({
     
     setSyncConfig({
       sheetUrl: 'https://docs.google.com/spreadsheets/d/demo-indonesia/edit',
+      sheetId: '0',
       cityColumn: 'KC',
       informasiColumn: 'Layanan Informasi',
       permintaanColumn: 'Permintaan Tindakan',
@@ -778,21 +1395,30 @@ export default function IndonesiaMap({
   };
 
   const handleResetToDefault = () => {
+    const hasEverSynced = localStorage.getItem('has_synced_custom_data') === 'true' || syncConfig.isSynced;
     try {
       const savedSynced = localStorage.getItem('indonesia_map_synced_default_cities');
       if (savedSynced) {
         const parsed = JSON.parse(savedSynced);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          onCitiesDataChange(parsed);
-          setSuccessMsg('Kembali ke data Google Sheet yang tersinkron.');
-          setTimeout(() => setSuccessMsg(null), 2000);
+          onCitiesDataChange(parsed, syncConfig);
+          if (parsed[0]) setSelectedCityId(parsed[0].id);
+          setSuccessMsg('Data sinkronisasi Google Sheet aktif & dipulihkan.');
+          setTimeout(() => setSuccessMsg(null), 2500);
           return;
         }
       }
     } catch (e) {}
 
+    // If admin has synced custom data, prevent resetting to hardcoded default demo cities
+    if (hasEverSynced && currentCities && currentCities.length > 0) {
+      setSuccessMsg('Data yang telah disinkronkan oleh Admin tetap diamankan di Cloud.');
+      setTimeout(() => setSuccessMsg(null), 2500);
+      return;
+    }
+
     onCitiesDataChange(DEFAULT_CITIES);
-    const resetCfg = {
+    const resetCfg: MapSyncConfig = {
       sheetUrl: '',
       sheetId: '',
       cityColumn: '',
@@ -803,7 +1429,7 @@ export default function IndonesiaMap({
       isSynced: false,
     };
     setSyncConfig(resetCfg);
-    saveMapDataToCloud(DEFAULT_CITIES, resetCfg);
+    saveMapDataToCloud(DEFAULT_CITIES, resetCfg, false);
     setSheetRawRows([]);
     setAvailableColumns([]);
     setSelectedCityId('1'); // Reset to Jakarta
@@ -811,9 +1437,260 @@ export default function IndonesiaMap({
     setTimeout(() => setSuccessMsg(null), 2000);
   };
 
+  // Get active dynamic filters for map
+  const activeMapFilters = filterReferences.filter(ref => (ref.placements || []).includes('map'));
+  const additionalMapFilters = activeMapFilters.filter(
+    ref => !/^(ref_bulan|ref_kepwil|ref_kc|bulan|kepwil|kc|kantor_cabang)$/i.test(ref.id) &&
+           !/^(bulan|kepwil|kantor cabang|kantor\s*cabang)$/i.test(ref.name)
+  );
+
+  const isAnyFilterActive = selectedBulan !== 'Semua' || 
+    selectedKepwil !== 'Semua' || 
+    selectedKantorCabang !== 'Semua' || 
+    Object.values(dynamicFilterStates).some(val => val && val !== 'Semua');
+
+  const handleResetAllFilters = () => {
+    setSelectedBulan('Semua');
+    setSelectedKepwil('Semua');
+    setSelectedKantorCabang('Semua');
+    setDynamicFilterStates({});
+  };
+
   return (
     <div id="geographic-monitoring-section" className="grid grid-cols-1 lg:grid-cols-12 gap-6">
       
+      {/* FILTER SECTION WITH 3 PRIMARY DROPDOWNS & COLUMN REFERENCE MENU */}
+      <div className="col-span-12 bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs transition-all">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setIsFilterExpanded(!isFilterExpanded)}
+                className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-50 to-indigo-50 border border-emerald-200/70 hover:border-emerald-300 flex items-center justify-center text-emerald-700 shadow-3xs shrink-0 cursor-pointer transition-colors"
+                title={isFilterExpanded ? "Sembunyikan Filter" : "Buka Filter"}
+                id="map-filter-icon-toggle-btn"
+              >
+                <Filter className="w-5 h-5" />
+              </button>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm font-black text-slate-800 tracking-tight flex items-center gap-1.5">
+                    <span>Filter Data Peta & Acuan Kolom</span>
+                  </h3>
+                  {isAnyFilterActive && (
+                    <span className="text-[11px] bg-indigo-100 text-indigo-800 font-extrabold px-2.5 py-0.5 rounded-full border border-indigo-200 animate-fadeIn">
+                      Filter Aktif
+                    </span>
+                  )}
+                  <span className="text-[11px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-md border border-slate-200">
+                    {uniqueCities.length} KC Terpetakan
+                  </span>
+
+                  {/* Active filter summary chips */}
+                  <div className="hidden sm:flex items-center gap-1.5 overflow-x-auto text-[10px]">
+                    <span className="bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md font-semibold text-indigo-800">
+                      Bulan: <strong>{selectedBulan}</strong>
+                    </span>
+                    <span className="bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-semibold text-emerald-800 truncate max-w-[130px]">
+                      KEPWIL: <strong>{selectedKepwil}</strong>
+                    </span>
+                    <span className="bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md font-semibold text-blue-800 truncate max-w-[150px]">
+                      KC: <strong>{selectedKantorCabang}</strong>
+                    </span>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {isFilterExpanded ? "Saring data berdasarkan Periode Bulan, KEPWIL, dan KC. Kolom acuan dapat disesuaikan." : "Klik 'Buka Filter' untuk mengubah kriteria penyaringan."}
+                </p>
+              </div>
+            </div>
+
+            {/* Top Action Buttons: Column Reference Menu, Reset & Expand Toggle */}
+            <div className="flex items-center gap-2 flex-wrap shrink-0">
+              {/* TOMBOL PILIH ACUAN KOLOM FILTER */}
+              <button
+                type="button"
+                onClick={() => setIsColumnMappingModalOpen(true)}
+                className="px-3.5 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 hover:from-emerald-100 hover:to-teal-100 text-emerald-800 border border-emerald-200/90 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-3xs hover:shadow-2xs active:scale-95"
+                id="open-column-mapping-modal-btn"
+                title="Pilih dan atur kolom Google Sheet / Excel yang menjadi acuan filter"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                <span>Acuan Kolom</span>
+                <span className="bg-emerald-200/80 text-emerald-900 text-[10px] font-extrabold px-1.5 py-0.2 rounded-md ml-0.5">
+                  {detectedColumns.length}
+                </span>
+              </button>
+
+              {/* Reset Filters */}
+              {isAnyFilterActive && (
+                <button
+                  type="button"
+                  onClick={handleResetAllFilters}
+                  className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-3xs shrink-0 active:scale-95 animate-fadeIn"
+                  id="reset-all-filters-btn"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                  <span className="hidden sm:inline">Reset</span>
+                </button>
+              )}
+
+              {/* TOGGLE EXPAND / COLLAPSE */}
+              <button
+                type="button"
+                onClick={() => setIsFilterExpanded(!isFilterExpanded)}
+                className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-xl border transition-all cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300 shadow-2xs"
+                id="toggle-map-filter-btn"
+              >
+                <span>{isFilterExpanded ? 'Sembunyikan' : 'Buka Filter'}</span>
+                {isFilterExpanded ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+              </button>
+            </div>
+          </div>
+
+          {/* COLLAPSIBLE FILTER DROPDOWNS */}
+          {isFilterExpanded && (
+            <div className="space-y-3.5 animate-fadeIn pt-1">
+              {/* GRID 3 PRIMARY FILTER DROPDOWNS */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                {/* 1. FILTER BULAN / PERIODE */}
+                <SearchableFilterSelect
+                  id="filter-select-bulan"
+                  label={`1. Filter Periode Bulan`}
+                  icon={<Calendar className="w-3.5 h-3.5 text-indigo-600" />}
+                  value={selectedBulan}
+                  onChange={(val) => setSelectedBulan(val)}
+                  options={availableBulanList}
+                  allLabel={`Semua Bulan (${availableBulanList.length})`}
+                  colorScheme="indigo"
+                  searchPlaceholder="Cari bulan (contoh: Januari, 01)..."
+                />
+
+                {/* 2. FILTER KEPWIL */}
+                <SearchableFilterSelect
+                  id="filter-select-kepwil"
+                  label={`2. Filter Kedeputian Wilayah (KEPWIL)`}
+                  icon={<Landmark className="w-3.5 h-3.5 text-emerald-600" />}
+                  value={selectedKepwil}
+                  onChange={(val) => {
+                    setSelectedKepwil(val);
+                    // If user changes KEPWIL and selected KC does not belong to new KEPWIL, reset KC
+                    setSelectedKantorCabang('Semua');
+                  }}
+                  options={availableKepwilList}
+                  allLabel={`Semua Wilayah (${availableKepwilList.length})`}
+                  colorScheme="emerald"
+                  searchPlaceholder="Cari wilayah (contoh: KEPWIL IV, Jabar)..."
+                />
+
+                {/* 3. FILTER KANTOR CABANG */}
+                <SearchableFilterSelect
+                  id="filter-select-kc"
+                  label={`3. Filter Kantor Cabang (KC)`}
+                  icon={<Building2 className="w-3.5 h-3.5 text-blue-600" />}
+                  value={selectedKantorCabang}
+                  onChange={(val) => setSelectedKantorCabang(val)}
+                  groupedOptions={groupedKantorCabang}
+                  options={availableKantorCabangList}
+                  allLabel={`Semua Kantor Cabang (${availableKantorCabangList.length})`}
+                  colorScheme="blue"
+                  searchPlaceholder="Cari Kantor Cabang (contoh: Jakarta, Bandung)..."
+                />
+              </div>
+
+              {/* ADDITIONAL DYNAMIC FILTERS (IF CONFIGURED) */}
+              {additionalMapFilters.length > 0 && (
+                <div className={`grid grid-cols-1 md:grid-cols-${Math.min(additionalMapFilters.length, 3)} gap-3.5 pt-1 border-t border-slate-100`}>
+                  {additionalMapFilters.map((ref, idx) => {
+                    let options: string[] = [];
+                    if (ref.isDynamic) {
+                      const valSet = new Set<string>();
+                      uniqueCities.forEach(c => {
+                        if (c.rawRow && ref.columnName && c.rawRow[ref.columnName]) {
+                          valSet.add(String(c.rawRow[ref.columnName]).trim());
+                        }
+                      });
+                      options = Array.from(valSet).filter(Boolean).sort();
+                    } else {
+                      options = ref.manualItems || [];
+                    }
+
+                    const colorSchemes: ('indigo' | 'emerald' | 'blue')[] = ['indigo', 'emerald', 'blue'];
+                    const color = colorSchemes[idx % colorSchemes.length];
+
+                    return (
+                      <SearchableFilterSelect
+                        key={ref.id}
+                        id={`filter-${ref.id}`}
+                        label={ref.name}
+                        icon={<Database className={`w-3.5 h-3.5 text-${color}-600`} />}
+                        value={dynamicFilterStates[ref.id] || 'Semua'}
+                        onChange={(val) => setDynamicFilterStates(prev => ({ ...prev, [ref.id]: val }))}
+                        options={options}
+                        allLabel={`Semua ${ref.name} (${options.length})`}
+                        colorScheme={color}
+                        searchPlaceholder={`Cari ${ref.name}...`}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ACTIVE COLUMN REFERENCE INFORMATION STRIP */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-50/90 px-3.5 py-2 rounded-xl border border-slate-200/80 text-[11px] text-slate-600">
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
+              <span className="font-extrabold text-slate-700 flex items-center gap-1 shrink-0">
+                <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-600" />
+                Acuan Kolom Aktif:
+              </span>
+
+              <span className="bg-white border border-slate-200 px-2 py-0.5 rounded-md font-semibold text-slate-700 flex items-center gap-1 shadow-3xs">
+                📅 Bulan: <strong className="text-indigo-700">{syncConfig.bulanColumn || 'Deteksi Otomatis'}</strong>
+              </span>
+
+              <span className="bg-white border border-slate-200 px-2 py-0.5 rounded-md font-semibold text-slate-700 flex items-center gap-1 shadow-3xs">
+                🏛️ KEPWIL: <strong className="text-emerald-700">{syncConfig.kepwilColumn || 'Deteksi Otomatis'}</strong>
+              </span>
+
+              <span className="bg-white border border-slate-200 px-2 py-0.5 rounded-md font-semibold text-slate-700 flex items-center gap-1 shadow-3xs">
+                🏢 KC: <strong className="text-blue-700">{syncConfig.cityColumn || 'Deteksi Otomatis'}</strong>
+              </span>
+
+              <span className="bg-white border border-slate-200 px-2 py-0.5 rounded-md font-semibold text-slate-700 flex items-center gap-1 shadow-3xs">
+                📊 SLA: <strong className="text-teal-700">{syncConfig.slaColumn || 'Deteksi Otomatis'}</strong>
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsColumnMappingModalOpen(true)}
+              className="text-emerald-700 hover:text-emerald-800 font-bold hover:underline cursor-pointer ml-auto flex items-center gap-1"
+            >
+              <span>Ubah Acuan Kolom</span>
+              <ArrowUpRight className="w-3 h-3" />
+            </button>
+          </div>
+          
+          {/* Custom Indicators */}
+          {activeMapFilters.some(ref => ref.showIndicator) && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {activeMapFilters.filter(ref => ref.showIndicator).map(ref => {
+                const activeVal = dynamicFilterStates[ref.id] || 'Semua';
+                return (
+                  <div key={`indicator-${ref.id}`} className="bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs">
+                    <span className="text-slate-500 font-semibold">{ref.indicatorLabel || ref.name}:</span>
+                    <span className="font-bold text-slate-800">{activeVal}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* MAP VIEWPORT: Full 12-columns */}
       <div className="col-span-12 lg:col-span-12 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between text-slate-800">
         <div>
@@ -1705,10 +2582,48 @@ export default function IndonesiaMap({
                   </p>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                    {/* 1. KC / City Column */}
+                    {/* 1. Bulan Column */}
                     <div className="space-y-1 bg-white p-2.5 rounded-xl border border-emerald-100 shadow-2xs">
+                      <label className="block text-[11px] font-bold text-slate-800 flex items-center justify-between">
+                        <span>1. Kolom BULAN</span>
+                        <span className="text-[9px] text-indigo-600 font-semibold">(Filter Periode)</span>
+                      </label>
+                      <select
+                        value={syncConfig.bulanColumn || ''}
+                        onChange={(e) => handleColumnMappingChange('bulanColumn', e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-bold focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                        id="modal-select-bulan-col"
+                      >
+                        <option value="">-- Deteksi Otomatis (BULAN) --</option>
+                        {availableColumns.map(col => (
+                          <option key={`bulan_${col}`} value={col}>📅 {col}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* 2. KEPWIL Column */}
+                    <div className="space-y-1 bg-white p-2.5 rounded-xl border border-emerald-100 shadow-2xs">
+                      <label className="block text-[11px] font-bold text-slate-800 flex items-center justify-between">
+                        <span>2. Kolom KEPWIL</span>
+                        <span className="text-[9px] text-emerald-600 font-semibold">(Filter Wilayah)</span>
+                      </label>
+                      <select
+                        value={syncConfig.kepwilColumn || ''}
+                        onChange={(e) => handleColumnMappingChange('kepwilColumn', e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-bold focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                        id="modal-select-kepwil-col"
+                      >
+                        <option value="">-- Deteksi Otomatis (KEPWIL) --</option>
+                        {availableColumns.map(col => (
+                          <option key={`kepwil_${col}`} value={col}>🏛️ {col}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* 3. KC / City Column */}
+                    <div className="space-y-1 bg-white p-2.5 rounded-xl border border-emerald-100 shadow-2xs sm:col-span-2">
                       <label className="block text-[11px] font-bold text-emerald-900 flex items-center justify-between">
-                        <span>1. Kolom KC / Kota / Cabang</span>
+                        <span>3. Kolom KANTOR CABANG / KC / Kota</span>
                         <span className="text-[9px] text-emerald-600 font-semibold">(Wajib)</span>
                       </label>
                       <select
@@ -1724,10 +2639,10 @@ export default function IndonesiaMap({
                       </select>
                     </div>
 
-                    {/* 2. Layanan Informasi */}
+                    {/* 4. Layanan Informasi */}
                     <div className="space-y-1 bg-white p-2.5 rounded-xl border border-emerald-100 shadow-2xs">
                       <label className="block text-[11px] font-bold text-slate-800 flex items-center justify-between">
-                        <span>2. Kolom Layanan Informasi</span>
+                        <span>4. Kolom Layanan Informasi</span>
                         <span className="text-[9px] text-blue-600 font-semibold">(Hitung Layanan)</span>
                       </label>
                       <select
@@ -1743,10 +2658,10 @@ export default function IndonesiaMap({
                       </select>
                     </div>
 
-                    {/* 3. Permintaan Tindakan */}
+                    {/* 5. Permintaan Tindakan */}
                     <div className="space-y-1 bg-white p-2.5 rounded-xl border border-emerald-100 shadow-2xs">
                       <label className="block text-[11px] font-bold text-slate-800 flex items-center justify-between">
-                        <span>3. Kolom Permintaan Tindakan</span>
+                        <span>5. Kolom Permintaan Tindakan</span>
                         <span className="text-[9px] text-amber-600 font-semibold">(Hitung Layanan)</span>
                       </label>
                       <select
@@ -1762,10 +2677,10 @@ export default function IndonesiaMap({
                       </select>
                     </div>
 
-                    {/* 4. Pengaduan Layanan */}
+                    {/* 6. Pengaduan Layanan */}
                     <div className="space-y-1 bg-white p-2.5 rounded-xl border border-emerald-100 shadow-2xs">
                       <label className="block text-[11px] font-bold text-slate-800 flex items-center justify-between">
-                        <span>4. Kolom Pengaduan Layanan</span>
+                        <span>6. Kolom Pengaduan Layanan</span>
                         <span className="text-[9px] text-rose-600 font-semibold">(Hitung Layanan)</span>
                       </label>
                       <select
@@ -1781,10 +2696,10 @@ export default function IndonesiaMap({
                       </select>
                     </div>
 
-                    {/* 5. SLA Column */}
-                    <div className="space-y-1 bg-white p-2.5 rounded-xl border border-emerald-100 shadow-2xs sm:col-span-2">
+                    {/* 7. SLA Column */}
+                    <div className="space-y-1 bg-white p-2.5 rounded-xl border border-emerald-100 shadow-2xs">
                       <label className="block text-[11px] font-bold text-slate-800 flex items-center justify-between">
-                        <span>5. Kolom Kepatuhan SLA (%)</span>
+                        <span>7. Kolom Kepatuhan SLA (%)</span>
                         <span className="text-[9px] text-emerald-700 font-semibold">(Persentase SLA)</span>
                       </label>
                       <select
@@ -2023,6 +2938,313 @@ export default function IndonesiaMap({
                 >
                   <Save className="h-3.5 w-3.5" />
                   Simpan
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DIALOG: PILIH KOLOM ACUAN FILTER BERDASARKAN DATA SINKRONISASI */}
+      {isColumnMappingModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs animate-fadeIn p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-scaleIn text-slate-800" id="column-mapping-modal">
+            
+            {/* Header Modal */}
+            <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 border-b border-slate-200/80">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm">
+                  <SlidersHorizontal className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-800 text-sm sm:text-base tracking-tight">
+                    Pilih Kolom Acuan Filter & Layanan
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Tentukan kolom dari file spreadsheet / Google Sheet Anda yang menjadi acuan filter dan visualisasi peta.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsColumnMappingModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 overflow-y-auto space-y-5 flex-1 text-xs">
+              
+              {/* Petunjuk Banner */}
+              <div className="bg-emerald-50/80 border border-emerald-200/80 rounded-xl p-3.5 flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="text-emerald-900 leading-relaxed">
+                  <strong>Sinkronisasi Kolom Cerdas:</strong> Pilih header kolom yang sesuai pada data Anda di bawah ini. Nilai dropdown filter (Bulan, KEPWIL, Kantor Cabang) serta perhitungan metrik akan otomatis disesuaikan secara real-time.
+                </div>
+              </div>
+
+              {/* SECTION 1: KOLOM ACUAN FILTER UTAMA */}
+              <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <h4 className="font-black text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
+                  <Filter className="w-4 h-4 text-indigo-600" />
+                  <span>1. Kolom Acuan Filter Interaktif</span>
+                </h4>
+
+                <div className="space-y-3.5 pt-1">
+                  {/* Acuan Filter Bulan */}
+                  <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-slate-700 text-xs flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Kolom Acuan Filter Bulan / Periode:</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400">Contoh: BULAN, Periode, Month</span>
+                    </div>
+                    <select
+                      value={syncConfig.bulanColumn || ''}
+                      onChange={(e) => handleColumnMappingChange('bulanColumn', e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                      id="select-column-bulan"
+                    >
+                      <option value="">-- Deteksi Otomatis (BULAN) --</option>
+                      {detectedColumns.map(col => (
+                        <option key={col} value={col}>
+                          📅 {col}
+                        </option>
+                      ))}
+                    </select>
+                    {getColumnSampleValues(syncConfig.bulanColumn || 'BULAN').length > 0 && (
+                      <div className="text-[11px] text-slate-500 flex items-center gap-1.5 flex-wrap pt-0.5">
+                        <span className="font-semibold text-slate-600">Sampel Data:</span>
+                        {getColumnSampleValues(syncConfig.bulanColumn || 'BULAN').map((s, idx) => (
+                          <span key={idx} className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-100 font-mono text-[10px]">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Acuan Filter KEPWIL */}
+                  <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-slate-700 text-xs flex items-center gap-1.5">
+                        <Landmark className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Kolom Acuan Filter Kedeputian Wilayah (KEPWIL):</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400">Contoh: KEPWIL, Wilayah, Kanwil</span>
+                    </div>
+                    <select
+                      value={syncConfig.kepwilColumn || ''}
+                      onChange={(e) => handleColumnMappingChange('kepwilColumn', e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                      id="select-column-kepwil"
+                    >
+                      <option value="">-- Deteksi Otomatis (KEPWIL) --</option>
+                      {detectedColumns.map(col => (
+                        <option key={col} value={col}>
+                          🏛️ {col}
+                        </option>
+                      ))}
+                    </select>
+                    {getColumnSampleValues(syncConfig.kepwilColumn || 'KEPWIL').length > 0 && (
+                      <div className="text-[11px] text-slate-500 flex items-center gap-1.5 flex-wrap pt-0.5">
+                        <span className="font-semibold text-slate-600">Sampel Data:</span>
+                        {getColumnSampleValues(syncConfig.kepwilColumn || 'KEPWIL').map((s, idx) => (
+                          <span key={idx} className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-100 font-mono text-[10px]">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Acuan Filter Kantor Cabang (KC) */}
+                  <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-slate-700 text-xs flex items-center gap-1.5">
+                        <Building2 className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Kolom Acuan Kantor Cabang (KC) / Kota:</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400">Contoh: KANTOR CABANG, KC, Nama KC</span>
+                    </div>
+                    <select
+                      value={syncConfig.cityColumn || ''}
+                      onChange={(e) => handleColumnMappingChange('cityColumn', e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                      id="select-column-kc"
+                    >
+                      <option value="">-- Deteksi Otomatis (KANTOR CABANG) --</option>
+                      {detectedColumns.map(col => (
+                        <option key={col} value={col}>
+                          🏢 {col}
+                        </option>
+                      ))}
+                    </select>
+                    {getColumnSampleValues(syncConfig.cityColumn || 'KC').length > 0 && (
+                      <div className="text-[11px] text-slate-500 flex items-center gap-1.5 flex-wrap pt-0.5">
+                        <span className="font-semibold text-slate-600">Sampel Data:</span>
+                        {getColumnSampleValues(syncConfig.cityColumn || 'KC').map((s, idx) => (
+                          <span key={idx} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-100 font-mono text-[10px]">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 2: KOLOM ACUAN METRIK LAYANAN & SLA */}
+              <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <h4 className="font-black text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-emerald-600" />
+                  <span>2. Kolom Acuan Metrik Layanan & Kepatuhan SLA</span>
+                </h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  {/* Layanan Informasi */}
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1">
+                    <label className="font-bold text-slate-700 text-[11px] flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                      <span>Layanan Informasi:</span>
+                    </label>
+                    <select
+                      value={syncConfig.informasiColumn || ''}
+                      onChange={(e) => handleColumnMappingChange('informasiColumn', e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-800"
+                    >
+                      <option value="">-- Deteksi Otomatis --</option>
+                      {detectedColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Permintaan Tindakan */}
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1">
+                    <label className="font-bold text-slate-700 text-[11px] flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                      <span>Permintaan Tindakan:</span>
+                    </label>
+                    <select
+                      value={syncConfig.permintaanColumn || ''}
+                      onChange={(e) => handleColumnMappingChange('permintaanColumn', e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-800"
+                    >
+                      <option value="">-- Deteksi Otomatis --</option>
+                      {detectedColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Pengaduan Layanan */}
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1">
+                    <label className="font-bold text-slate-700 text-[11px] flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                      <span>Pengaduan Layanan:</span>
+                    </label>
+                    <select
+                      value={syncConfig.pengaduanColumn || ''}
+                      onChange={(e) => handleColumnMappingChange('pengaduanColumn', e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-800"
+                    >
+                      <option value="">-- Deteksi Otomatis --</option>
+                      {detectedColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Kepatuhan SLA */}
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1">
+                    <label className="font-bold text-slate-700 text-[11px] flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      <span>Kepatuhan SLA (%):</span>
+                    </label>
+                    <select
+                      value={syncConfig.slaColumn || ''}
+                      onChange={(e) => handleColumnMappingChange('slaColumn', e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-800"
+                    >
+                      <option value="">-- Deteksi Otomatis --</option>
+                      {detectedColumns.map(col => <option key={col} value={col}>{col}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 3: LIVE PREVIEW PERHITUNGAN */}
+              <div className="bg-gradient-to-br from-slate-900 to-indigo-950 text-white p-4 rounded-xl space-y-2.5 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <h5 className="font-bold text-xs text-emerald-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Hasil Perhitungan Real-Time Berdasarkan Acuan Terpilih:</span>
+                  </h5>
+                  <span className="text-[10px] text-slate-300 font-mono">
+                    {detectedColumns.length} Kolom Terdeteksi
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                  <div className="bg-white/10 p-2 rounded-lg backdrop-blur-xs">
+                    <div className="text-[10px] text-slate-300">KC Terpetakan</div>
+                    <div className="text-sm sm:text-base font-black text-white">{uniqueCities.length} KC</div>
+                  </div>
+                  <div className="bg-white/10 p-2 rounded-lg backdrop-blur-xs">
+                    <div className="text-[10px] text-slate-300">Total Layanan</div>
+                    <div className="text-sm sm:text-base font-black text-amber-300">
+                      {uniqueCities.reduce((acc, c) => acc + c.total, 0).toLocaleString('id-ID')}
+                    </div>
+                  </div>
+                  <div className="bg-white/10 p-2 rounded-lg backdrop-blur-xs">
+                    <div className="text-[10px] text-slate-300">Rata-rata SLA</div>
+                    <div className="text-sm sm:text-base font-black text-emerald-300">
+                      {(uniqueCities.reduce((acc, c) => acc + c.slaCompliance, 0) / (uniqueCities.length || 1)).toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 text-xs">
+              <button
+                type="button"
+                onClick={handleResetColumnMappingToAuto}
+                className="px-3 py-1.5 text-slate-600 hover:text-indigo-700 hover:bg-slate-200/70 rounded-lg font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                id="reset-column-mapping-btn"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Deteksi Otomatis</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsColumnMappingModalOpen(false)}
+                  className="px-4 py-2 border border-slate-200 hover:bg-slate-100 rounded-xl font-bold text-slate-600 transition-colors cursor-pointer"
+                >
+                  Tutup
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const rowsToProcess = sheetRawRows.length > 0 ? sheetRawRows : currentCities.map(c => c.rawRow).filter(Boolean);
+                    if (rowsToProcess && rowsToProcess.length > 0) {
+                      applyRowsWithConfig(rowsToProcess, syncConfig);
+                    }
+                    saveMapDataToCloud(currentCities, syncConfig);
+                    onSyncConfigChange?.(syncConfig);
+                    setIsColumnMappingModalOpen(false);
+                    setSuccessMsg('Acuan kolom filter berhasil disimpan dan diterapkan!');
+                    setTimeout(() => setSuccessMsg(null), 2500);
+                  }}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-extrabold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  id="save-column-mapping-modal-btn"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>Simpan & Terapkan Acuan</span>
                 </button>
               </div>
             </div>

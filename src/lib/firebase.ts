@@ -20,12 +20,14 @@ export interface CloudAppSettings {
   syncInterval?: 'manual' | '15m' | '30m' | '1h' | '1d';
   lastSyncedAt?: string | null;
   volumeThresholds?: { rendahMax: number; sedangMax: number; tinggiMax: number };
+  hasSyncedCustomData?: boolean;
   updatedAt?: string;
 }
 
 export interface CloudMapData {
   cities?: CityData[];
   syncConfig?: MapSyncConfig;
+  hasSyncedCustomData?: boolean;
   updatedAt?: string;
 }
 
@@ -94,7 +96,7 @@ export function subscribeToMapData(callback: (data: CloudMapData | null) => void
 /**
  * Save Map Cities & Sync Config to Firestore
  */
-export async function saveMapDataToCloud(cities?: CityData[], syncConfig?: MapSyncConfig) {
+export async function saveMapDataToCloud(cities?: CityData[], syncConfig?: MapSyncConfig, hasSyncedCustomData?: boolean) {
   try {
     const docRef = doc(db, 'map_data', 'cities_and_config');
     const payload: Partial<CloudMapData> = {
@@ -102,6 +104,7 @@ export async function saveMapDataToCloud(cities?: CityData[], syncConfig?: MapSy
     };
     if (cities !== undefined) payload.cities = cities;
     if (syncConfig !== undefined) payload.syncConfig = syncConfig;
+    if (hasSyncedCustomData !== undefined) payload.hasSyncedCustomData = hasSyncedCustomData;
 
     await setDoc(docRef, payload, { merge: true });
   } catch (err) {

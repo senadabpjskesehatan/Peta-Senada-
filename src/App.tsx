@@ -26,12 +26,21 @@ import {
   ShieldAlert,
   UserCheck,
   LogOut,
-  LogIn
+  LogIn,
+  Filter,
+  Calendar,
+  Landmark,
+  Building2,
+  RotateCcw
 } from 'lucide-react';
 
-import { CityData, Ticket, MonthlyPerformance, DynamicChart } from './types';
-import { DEFAULT_CITIES, DEFAULT_TICKETS, MONTHLY_PERFORMANCE, DEFAULT_CHARTS, SAMPLE_SHEETS_CSV, findCityCoordinates } from './data/defaultData';
+import { CityData, Ticket, MonthlyPerformance, DynamicChart, MapSyncConfig, FilterReference } from './types';
+import SearchableFilterSelect from './components/SearchableFilterSelect';
+import { computeFilterOptions } from './utils/filterOptions';
+import { DEFAULT_CITIES, DEFAULT_TICKETS, MONTHLY_PERFORMANCE, DEFAULT_CHARTS, SAMPLE_SHEETS_CSV, findCityCoordinates, getKepwilForCity } from './data/defaultData';
 import { parseNumericValue, fetchSheetData, parseCSV } from './utils/sheetParser';
+import { isBulanMatching, isKepwilMatching, isKantorCabangMatching, parseMonthValue } from './utils/monthHelper';
+import SuperMindSenada from './components/SuperMindSenada';
 import {
   subscribeToAppSettings,
   subscribeToMapData,
@@ -47,6 +56,8 @@ import SlaTracker from './components/SlaTracker';
 import MonthlyAnalytics from './components/MonthlyAnalytics';
 import DynamicChartItem from './components/DynamicChartItem';
 import AdminLoginModal from './components/AdminLoginModal';
+import ReferenceManager from './components/ReferenceManager';
+import { SenadaLogo } from './components/SenadaLogo';
 
 const CITIES_STORAGE_KEY = 'indonesia_map_cities_data_v3';
 const SYNCED_DEFAULT_CITIES_KEY = 'indonesia_map_synced_default_cities';
@@ -114,7 +125,25 @@ export default function App() {
     }
     return DEFAULT_CHARTS;
   });
-  const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts'>('map');
+  const [mapSyncConfig, setMapSyncConfig] = useState<MapSyncConfig>(() => {
+    try {
+      const saved = localStorage.getItem('map_sync_config');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return {
+      sheetUrl: localStorage.getItem('google_sheet_sync_url') || '',
+      sheetId: '',
+      cityColumn: '',
+      informasiColumn: '',
+      permintaanColumn: '',
+      pengaduanColumn: '',
+      slaColumn: '',
+      isSynced: false,
+    };
+  });
+
+  const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts' | 'sms'>('map');
+  const [isGlobalFilterExpanded, setIsGlobalFilterExpanded] = useState<boolean>(true);
   const [showCopyNotification, setShowCopyNotification] = useState(false);
   const [showCopyDialog, setShowCopyDialog] = useState<string | null>(null);
   const [isCloudConnected, setIsCloudConnected] = useState(false);
@@ -150,6 +179,18 @@ export default function App() {
     const unsubMap = subscribeToMapData((cloudMap) => {
       if (cloudMap) {
         setIsCloudConnected(true);
+        if (cloudMap.syncConfig) {
+          setMapSyncConfig(cloudMap.syncConfig);
+          if (cloudMap.syncConfig.sheetUrl) {
+            setGoogleSheetUrl(cloudMap.syncConfig.sheetUrl);
+            try {
+              localStorage.setItem('google_sheet_sync_url', cloudMap.syncConfig.sheetUrl);
+            } catch (e) {}
+          }
+          try {
+            localStorage.setItem('map_sync_config', JSON.stringify(cloudMap.syncConfig));
+          } catch (e) {}
+        }
         if (cloudMap.cities && Array.isArray(cloudMap.cities) && cloudMap.cities.length > 0) {
           const mapped = cloudMap.cities.map(c => {
             const resolved = findCityCoordinates(c.name);
@@ -163,6 +204,7 @@ export default function App() {
           try {
             localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mapped));
             localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mapped));
+            localStorage.setItem('has_synced_custom_data', 'true');
           } catch (e) {}
         }
       }
@@ -193,7 +235,10 @@ export default function App() {
       if (cloudSettings) {
         setIsCloudConnected(true);
         if (cloudSettings.navOrder && Array.isArray(cloudSettings.navOrder)) {
-          const filtered = cloudSettings.navOrder.filter((k: string) => k !== 'analytics' && k !== 'tickets');
+          const filtered = cloudSettings.navOrder.filter((k: string) => k !== 'analytics' && k !== 'tickets' && k !== 'referensi');
+          if (!filtered.includes('sms')) {
+            filtered.push('sms');
+          }
           if (filtered.length > 0) setNavOrder(filtered);
         }
         if (cloudSettings.syncInterval) {
@@ -233,24 +278,117 @@ export default function App() {
     }
   }, [dynamicCharts]);
 
+  // 3 Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang)
+  const [selectedBulan, setSelectedBulan] = useState<string>('Semua');
+  const [selectedKepwil, setSelectedKepwil] = useState<string>('Semua');
+  const [selectedKantorCabang, setSelectedKantorCabang] = useState<string>('Semua');
+
+  // Filtered dataset for global metrics calculation according to active dropdown filters
+  const filteredCitiesForMetrics = useMemo(() => {
+    return citiesData.filter(c => {
+      let rowBulan = (c.bulan || '').trim();
+      if (!rowBulan && c.rawRow) {
+        if (mapSyncConfig.bulanColumn && c.rawRow[mapSyncConfig.bulanColumn]) {
+          rowBulan = String(c.rawRow[mapSyncConfig.bulanColumn]).trim();
+        }
+        if (!rowBulan) {
+          for (const [k, v] of Object.entries(c.rawRow)) {
+            if (/bulan|month|periode|bln/i.test(k.trim())) {
+              rowBulan = String(v || '').trim();
+              if (rowBulan) break;
+            }
+          }
+        }
+      }
+
+      let rowKepwil = '';
+      if (c.rawRow) {
+        if (mapSyncConfig.kepwilColumn && c.rawRow[mapSyncConfig.kepwilColumn] !== undefined) {
+          rowKepwil = String(c.rawRow[mapSyncConfig.kepwilColumn]).trim();
+        }
+        if (!rowKepwil) {
+          for (const [k, v] of Object.entries(c.rawRow)) {
+            if (/^kepwil$/i.test(k.trim())) {
+              rowKepwil = String(v || '').trim();
+              if (rowKepwil) break;
+            }
+          }
+        }
+        if (!rowKepwil) {
+          for (const [k, v] of Object.entries(c.rawRow)) {
+            if (/kepwil|kedeputian.*wilayah|kantor.*wilayah|wilayah|kanwil|regional/i.test(k.trim())) {
+              rowKepwil = String(v || '').trim();
+              if (rowKepwil) break;
+            }
+          }
+        }
+      }
+      if (!rowKepwil) rowKepwil = (c.kepwil || '').trim();
+      if (!rowKepwil) rowKepwil = getKepwilForCity(c.kantorCabang || c.name || '');
+
+      let rowKC = '';
+      if (c.rawRow) {
+        if (mapSyncConfig.cityColumn && c.rawRow[mapSyncConfig.cityColumn] !== undefined) {
+          rowKC = String(c.rawRow[mapSyncConfig.cityColumn]).trim();
+        }
+        if (!rowKC) {
+          for (const [k, v] of Object.entries(c.rawRow)) {
+            if (/^kantor cabang$|^kc$/i.test(k.trim())) {
+              rowKC = String(v || '').trim();
+              if (rowKC) break;
+            }
+          }
+        }
+        if (!rowKC) {
+          for (const [k, v] of Object.entries(c.rawRow)) {
+            if (/kantor.*cabang|kc|cabang|kota|city|lokasi|daerah/i.test(k.trim())) {
+              rowKC = String(v || '').trim();
+              if (rowKC) break;
+            }
+          }
+        }
+      }
+      if (!rowKC) rowKC = (c.kantorCabang || '').trim();
+      if (!rowKC) rowKC = (c.name || '').trim();
+
+      if (selectedBulan !== 'Semua' && !isBulanMatching(rowBulan, selectedBulan)) {
+        return false;
+      }
+      if (selectedKepwil !== 'Semua' && !isKepwilMatching(rowKepwil, selectedKepwil)) {
+        return false;
+      }
+      if (selectedKantorCabang !== 'Semua' && !isKantorCabangMatching(rowKC, selectedKantorCabang)) {
+        return false;
+      }
+      return true;
+    });
+  }, [citiesData, selectedBulan, selectedKepwil, selectedKantorCabang, mapSyncConfig]);
+
+  const { availableBulanList, availableKepwilList, availableKantorCabangList, groupedKantorCabang } = useMemo(() => {
+    return computeFilterOptions(citiesData, [], mapSyncConfig, selectedBulan, selectedKepwil);
+  }, [citiesData, mapSyncConfig, selectedBulan, selectedKepwil]);
+
   // Global aggregate metrics computed on the fly from current Excel / Sheet cities data
   const summaryMetrics = useMemo(() => {
-    const totalInformasi = citiesData.reduce((acc, c) => acc + parseNumericValue(c.informasi), 0);
-    const totalPermintaan = citiesData.reduce((acc, c) => acc + parseNumericValue(c.permintaan), 0);
-    const totalPengaduan = citiesData.reduce((acc, c) => acc + parseNumericValue(c.pengaduan), 0);
+    const totalInformasi = filteredCitiesForMetrics.reduce((acc, c) => acc + parseNumericValue(c.informasi), 0);
+    const totalPermintaan = filteredCitiesForMetrics.reduce((acc, c) => acc + parseNumericValue(c.permintaan), 0);
+    const totalPengaduan = filteredCitiesForMetrics.reduce((acc, c) => acc + parseNumericValue(c.pengaduan), 0);
+    const breakdownSum = totalInformasi + totalPermintaan + totalPengaduan;
     
     // Total tiket is the sum of total in all mapped cities
-    const totalTiket = citiesData.reduce((acc, c) => {
+    const totalTiket = filteredCitiesForMetrics.reduce((acc, c) => {
       const cityTotal = parseNumericValue(c.total) > 0 ? parseNumericValue(c.total) : (parseNumericValue(c.informasi) + parseNumericValue(c.permintaan) + parseNumericValue(c.pengaduan));
       return acc + cityTotal;
     }, 0);
 
-    const pctInformasi = totalTiket > 0 ? ((totalInformasi / totalTiket) * 100).toFixed(1) : '0';
-    const pctPermintaan = totalTiket > 0 ? ((totalPermintaan / totalTiket) * 100).toFixed(1) : '0';
-    const pctPengaduan = totalTiket > 0 ? ((totalPengaduan / totalTiket) * 100).toFixed(1) : '0';
+    const finalTotalTiket = Math.max(totalTiket, breakdownSum);
+
+    const pctInformasi = finalTotalTiket > 0 ? ((totalInformasi / finalTotalTiket) * 100).toFixed(1) : '0';
+    const pctPermintaan = finalTotalTiket > 0 ? ((totalPermintaan / finalTotalTiket) * 100).toFixed(1) : '0';
+    const pctPengaduan = finalTotalTiket > 0 ? ((totalPengaduan / finalTotalTiket) * 100).toFixed(1) : '0';
 
     return {
-      totalTiket,
+      totalTiket: finalTotalTiket,
       totalInformasi,
       pctInformasi,
       totalPermintaan,
@@ -258,12 +396,26 @@ export default function App() {
       totalPengaduan,
       pctPengaduan
     };
-  }, [citiesData]);
+  }, [filteredCitiesForMetrics]);
 
-  // Handler to modify/update cities from map component (Google Sheets mapping)
-  const handleCitiesDataChange = (updatedCities: CityData[]) => {
+  // Handler to modify/update cities from map component (Google Sheets mapping / Excel upload)
+  const handleCitiesDataChange = (updatedCities: CityData[], updatedConfig?: MapSyncConfig) => {
     setCitiesData(updatedCities);
-    saveMapDataToCloud(updatedCities);
+    try {
+      localStorage.setItem('has_synced_custom_data', 'true');
+      localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(updatedCities));
+      localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(updatedCities));
+    } catch (e) {}
+    
+    if (updatedConfig) {
+      setMapSyncConfig(updatedConfig);
+      try {
+        localStorage.setItem('map_sync_config', JSON.stringify(updatedConfig));
+      } catch (e) {}
+      saveMapDataToCloud(updatedCities, updatedConfig, true);
+    } else {
+      saveMapDataToCloud(updatedCities, mapSyncConfig, true);
+    }
   };
 
   // Add a new dynamic custom chart
@@ -302,14 +454,17 @@ export default function App() {
     saveDynamicChartsToCloud(updatedCharts);
   };
 
-  // Navigation order state for moveable/draggable nav items (Analytics menu is hidden)
+  // Navigation order state for moveable/draggable nav items
   const [navOrder, setNavOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem('sidebar_nav_order');
-    const defaultOrder = ['map', 'custom-charts'];
+    const defaultOrder = ['map', 'custom-charts', 'sms'];
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const filtered = parsed.filter((key: string) => key !== 'analytics' && key !== 'tickets');
+        const filtered = parsed.filter((key: string) => key !== 'analytics' && key !== 'tickets' && key !== 'referensi');
+        if (!filtered.includes('sms')) {
+          filtered.push('sms');
+        }
         return filtered.length > 0 ? filtered : defaultOrder;
       } catch (e) {
         console.error('Failed to parse sidebar nav order', e);
@@ -332,6 +487,24 @@ export default function App() {
     setNavOrder(newOrder);
     saveAppSettingsToCloud({ navOrder: newOrder });
   };
+
+  const [filterReferences, setFilterReferences] = useState<FilterReference[]>(() => {
+    const saved = localStorage.getItem('indonesia_map_filter_references');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return [
+      { id: 'ref_bulan', name: 'Bulan', description: 'Referensi bulan untuk filter.', columnName: 'BULAN', isDynamic: true, manualItems: [] },
+      { id: 'ref_kepwil', name: 'KEPWIL', description: 'Kantor wilayah.', columnName: 'KEPWIL', isDynamic: true, manualItems: [] },
+      { id: 'ref_kc', name: 'Kantor Cabang', description: 'Cabang pada wilayah tertentu.', columnName: 'KANTOR CABANG', isDynamic: true, manualItems: [] }
+    ];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('indonesia_map_filter_references', JSON.stringify(filterReferences));
+  }, [filterReferences]);
 
   // Google Sheet Auto-Sync & Interval States
   const [syncInterval, setSyncInterval] = useState<'manual' | '15m' | '30m' | '1h' | '1d'>(() => {
@@ -363,81 +536,164 @@ export default function App() {
   // Core Sync Execution Engine for Google Sheet & Feed
   const handleExecuteSync = async (overrideUrl?: string) => {
     const storedUrl = localStorage.getItem('google_sheet_sync_url') || '';
-    const targetUrl = overrideUrl !== undefined ? overrideUrl : (googleSheetUrl || storedUrl);
+    const targetUrl = overrideUrl !== undefined ? overrideUrl : (googleSheetUrl || mapSyncConfig?.sheetUrl || storedUrl);
+    
+    // If no target URL provided: NEVER reset to sample/dummy data.
+    // Retain current custom / synced data completely.
+    if (!targetUrl || !targetUrl.trim()) {
+      setSyncStatusToast('Tidak ada link Google Sheet aktif. Data tersimpan di Cloud dipertahankan.');
+      setTimeout(() => setSyncStatusToast(null), 3000);
+      return;
+    }
+
     setIsRefreshing(true);
 
     try {
-      if (targetUrl && targetUrl.trim()) {
-        const { data, columns } = await fetchSheetData(targetUrl);
-        if (data && data.length > 0) {
-          const matchedKC = columns.find(c => /kc|kantor.*cabang|cabang|kota|city|daerah|wilayah|lokasi|kabupaten|nama/i.test(c)) || columns[0] || '';
-          const matchedInfo = columns.find(c => /info|layanan.*info|informasi/i.test(c)) || '';
-          const matchedPermintaan = columns.find(c => /minta|layanan.*minta|permintaan|tindakan/i.test(c)) || '';
-          const matchedPengaduan = columns.find(c => /aduan|layanan.*aduan|pengaduan|komplain/i.test(c)) || '';
-          const matchedSla = columns.find(c => /sla|compliance|kepatuhan|persen|percent/i.test(c)) || '';
-
-          const mappedCities: CityData[] = data.map((row, idx) => {
-            const rawName = String(row[matchedKC] || `KC_${idx + 1}`).trim();
-            const infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
-            const permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
-            const pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
-            const slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
-
-            const existingCity = citiesData.find(c => c.name.toLowerCase() === rawName.toLowerCase());
-            const coords = existingCity ? { lat: existingCity.latitude, lon: existingCity.longitude } : findCityCoordinates(rawName);
-
-            return {
-              id: existingCity?.id || `city_${idx}_${Date.now()}`,
-              name: rawName,
-              latitude: coords.lat,
-              longitude: coords.lon,
-              informasi: infoVal,
-              permintaan: permVal,
-              pengaduan: pengVal,
-              total: infoVal + permVal + pengVal,
-              avgSlaDays: existingCity?.avgSlaDays || 2.5,
-              slaCompliance: slaVal
-            };
-          });
-
-          if (mappedCities.length > 0) {
-            setCitiesData(mappedCities);
-            localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mappedCities));
-            localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mappedCities));
-            saveMapDataToCloud(mappedCities);
+      const activeSheetId = mapSyncConfig?.sheetId || undefined;
+      const { data, columns } = await fetchSheetData(targetUrl, activeSheetId);
+      if (data && data.length > 0) {
+        const findColumnByPriority = (priorities: RegExp[]): string => {
+          for (const regex of priorities) {
+            const found = columns.find(c => regex.test(c.trim()));
+            if (found) return found;
           }
-        }
-      } else {
-        // Fallback to sample spreadsheet acuan data so numbers update strictly from Google Sheet source acuan
-        const sampleRaw = parseCSV(SAMPLE_SHEETS_CSV.map);
-        if (sampleRaw && sampleRaw.length > 0) {
-          const mappedCities: CityData[] = sampleRaw.map((row, idx) => {
-            const rawName = String(row['Kota'] || row['KC'] || `KC_${idx + 1}`).trim();
-            const infoVal = parseNumericValue(row['Layanan_Informasi'] || row['Layanan Informasi']);
-            const permVal = parseNumericValue(row['Layanan_Permintaan'] || row['Permintaan Tindakan']);
-            const pengVal = parseNumericValue(row['Layanan_Pengaduan'] || row['Pengaduan Layanan']);
-            const slaVal = parseNumericValue(row['Kepatuhan_SLA'] || row['Kepatuhan SLA']) || 90;
+          return '';
+        };
 
-            const existingCity = citiesData.find(c => c.name.toLowerCase() === rawName.toLowerCase());
-            const coords = existingCity ? { lat: existingCity.latitude, lon: existingCity.longitude } : findCityCoordinates(rawName);
+        const matchedBulan = mapSyncConfig.bulanColumn || findColumnByPriority([
+          /^(bulan|month|periode|bln)$/i,
+          /^(bulan|month|periode|bln|tanggal|tgl|waktu|date)/i,
+          /(bulan|month|periode|bln)/i
+        ]);
 
-            return {
-              id: existingCity?.id || `city_${idx}_${Date.now()}`,
-              name: rawName,
-              latitude: coords.lat,
-              longitude: coords.lon,
-              informasi: infoVal,
-              permintaan: permVal,
-              pengaduan: pengVal,
-              total: infoVal + permVal + pengVal,
-              avgSlaDays: existingCity?.avgSlaDays || 2.5,
-              slaCompliance: slaVal
-            };
-          });
+        const matchedKepwil = mapSyncConfig.kepwilColumn || findColumnByPriority([
+          /^(kepwil|kedeputian\s*wilayah|kantor\s*wilayah|kanwil|regional)$/i,
+          /(kepwil|kedeputian\s*wilayah|kantor\s*wilayah|kanwil|regional)/i,
+          /^(wilayah)$/i,
+          /(wilayah)/i
+        ]);
+
+        const matchedKC = mapSyncConfig.cityColumn || findColumnByPriority([
+          /^(nama\s*)?(kantor\s*cabang|kc)$/i,
+          /(kantor\s*cabang|kc\b|nama\s*kc|nama\s*cabang)/i,
+          /^(cabang|nama\s*kantor)$/i,
+          /^(kota|kabupaten|nama\s*kota|nama\s*kabupaten|daerah|lokasi)$/i,
+          /(cabang|kota|kabupaten|lokasi)/i
+        ]) || columns.find(c => c !== matchedBulan && c !== matchedKepwil && !/no|nomor|id|total|jumlah|sla/i.test(c)) || columns[0] || '';
+
+        const matchedInfo = mapSyncConfig.informasiColumn || findColumnByPriority([
+          /^(layanan\s*informasi|informasi|pemberian\s*informasi|info)$/i,
+          /(layanan\s*informasi|informasi\b|info\b)/i
+        ]);
+
+        const matchedPermintaan = mapSyncConfig.permintaanColumn || findColumnByPriority([
+          /^(permintaan\s*informasi|permintaan\s*tindakan|layanan\s*permintaan|permintaan|tindakan)$/i,
+          /(permintaan|tindakan|minta)/i
+        ]);
+
+        const matchedPengaduan = mapSyncConfig.pengaduanColumn || findColumnByPriority([
+          /^(pengaduan\s*peserta|layanan\s*pengaduan|pengaduan|aduan|komplain|keluhan)$/i,
+          /(pengaduan|aduan|komplain|keluhan)/i
+        ]);
+
+        const matchedTotal = findColumnByPriority([
+          /^(total\s*layanan|total\s*tiket|total\s*permohonan|total|jumlah|grand\s*total)$/i,
+          /(total|jumlah)/i
+        ]);
+
+        const matchedSla = mapSyncConfig.slaColumn || findColumnByPriority([
+          /^(kepatuhan\s*sla|persen\s*sla|sla\s*\(%\)|%\s*sla|sla\s*compliance|rata-rata\s*sla|sla)$/i,
+          /(sla|compliance|kepatuhan|persen|percent)/i
+        ]);
+
+        const mappedCities: CityData[] = data.map((row, idx) => {
+          const rawName = String(row[matchedKC] || '').trim();
+          if (!rawName) return null;
+
+          // Ignore summary rows like TOTAL, JUMLAH, GRAND TOTAL
+          if (/^(total|jumlah|grand\s*total|subtotal|rata-rata|average|total\s*keseluruhan)$/i.test(rawName)) {
+            return null;
+          }
+
+          let rawBulan = matchedBulan ? String(row[matchedBulan] || '').trim() : '';
+          if (!rawBulan) {
+            for (const [k, v] of Object.entries(row)) {
+              if (/bulan|month|periode|bln/i.test(k.trim())) {
+                const val = String(v || '').trim();
+                if (val) { rawBulan = val; break; }
+              }
+            }
+          }
+
+          let rawKepwil = matchedKepwil ? String(row[matchedKepwil] || '').trim() : '';
+          if (!rawKepwil) {
+            for (const [k, v] of Object.entries(row)) {
+              if (/kepwil|kedeputian|wilayah|kanwil/i.test(k.trim()) && !/cabang|kc/i.test(k.trim())) {
+                const val = String(v || '').trim();
+                if (val) { rawKepwil = val; break; }
+              }
+            }
+          }
+          if (!rawKepwil) {
+            rawKepwil = getKepwilForCity(rawName);
+          }
+
+          const existingCity = citiesData.find(c => c.name.toLowerCase() === rawName.toLowerCase());
+          const foundCoords = findCityCoordinates(rawName);
+          const lat = foundCoords ? foundCoords.lat : (existingCity ? existingCity.latitude : -6.2088);
+          const lon = foundCoords ? foundCoords.lon : (existingCity ? existingCity.longitude : 106.8456);
+
+          const infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
+          const permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
+          const pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
+          const slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
+
+          const totalFromCol = matchedTotal && row[matchedTotal] !== undefined ? parseNumericValue(row[matchedTotal]) : 0;
+          const calculatedTotal = infoVal + permVal + pengVal;
+          const total = totalFromCol > 0 ? totalFromCol : calculatedTotal;
+
+          const parsedBulan = parseMonthValue(rawBulan);
+          const normalizedBulan = parsedBulan ? parsedBulan.label : rawBulan;
+
+          return {
+            id: `row_${idx}_${rawName.replace(/[^a-z0-9]/gi, '_')}`,
+            name: rawName,
+            kantorCabang: rawName,
+            bulan: normalizedBulan,
+            kepwil: rawKepwil,
+            latitude: lat,
+            longitude: lon,
+            informasi: infoVal,
+            permintaan: permVal,
+            pengaduan: pengVal,
+            total,
+            avgSlaDays: 2.4,
+            slaCompliance: Math.min(100, Math.max(0, slaVal)),
+            rawRow: row
+          };
+        }).filter(Boolean) as CityData[];
+
+        if (mappedCities.length > 0) {
           setCitiesData(mappedCities);
           localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mappedCities));
           localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mappedCities));
-          saveMapDataToCloud(mappedCities);
+          localStorage.setItem('has_synced_custom_data', 'true');
+          const updatedCfg: MapSyncConfig = {
+            ...mapSyncConfig,
+            sheetUrl: targetUrl,
+            bulanColumn: matchedBulan,
+            kepwilColumn: matchedKepwil,
+            cityColumn: matchedKC,
+            informasiColumn: matchedInfo,
+            permintaanColumn: matchedPermintaan,
+            pengaduanColumn: matchedPengaduan,
+            slaColumn: matchedSla,
+            isSynced: true,
+            lastSyncedAt: new Date().toLocaleTimeString('id-ID')
+          };
+          setMapSyncConfig(updatedCfg);
+          localStorage.setItem('map_sync_config', JSON.stringify(updatedCfg));
+          saveMapDataToCloud(mappedCities, updatedCfg, true);
         }
       }
 
@@ -462,18 +718,19 @@ export default function App() {
       setLastSyncedAt(nowStr);
       localStorage.setItem('google_sheet_last_synced', nowStr);
       saveAppSettingsToCloud({ lastSyncedAt: nowStr });
-      setSyncStatusToast(`Sukses sinkronisasi (${nowStr})`);
+      setSyncStatusToast(`Sukses sinkronisasi Google Sheet (${nowStr})`);
       setTimeout(() => setSyncStatusToast(null), 3500);
     } catch (err: any) {
       console.error('Sheet Sync Error:', err);
-      setSyncStatusToast(`Gagal sync: ${err.message || 'Error koneksi Google Sheet'}`);
+      // NEVER reset existing data on sync error! Keep existing citiesData
+      setSyncStatusToast(`Gagal sync: ${err.message || 'Error koneksi Google Sheet'}. Data lama tetap aman.`);
       setTimeout(() => setSyncStatusToast(null), 4000);
     } finally {
       setIsRefreshing(false);
     }
   };
 
-  // Auto-Sync Timer Effect
+  // Auto-Sync Timer Effect - ONLY triggers if a valid sheetUrl is registered
   useEffect(() => {
     if (syncInterval === 'manual') return;
 
@@ -486,11 +743,14 @@ export default function App() {
     if (intervalMs <= 0) return;
 
     const intervalId = setInterval(() => {
-      handleExecuteSync();
+      const activeUrl = googleSheetUrl || mapSyncConfig?.sheetUrl || localStorage.getItem('google_sheet_sync_url');
+      if (activeUrl && activeUrl.trim()) {
+        handleExecuteSync(activeUrl);
+      }
     }, intervalMs);
 
     return () => clearInterval(intervalId);
-  }, [syncInterval, googleSheetUrl]);
+  }, [syncInterval, googleSheetUrl, mapSyncConfig]);
 
   // Helper list of city names for adding tickets form
   const cityNames = useMemo(() => {
@@ -509,34 +769,38 @@ export default function App() {
       
       {/* SIDEBAR */}
       <aside className="w-64 bg-slate-900 text-white flex flex-col shrink-0 relative z-20">
-        <div className="p-6 border-b border-slate-800">
-          <h1 className="text-xl font-bold tracking-tight text-blue-400 flex items-center gap-2">
-            <LayoutDashboard className="h-5 w-5 text-blue-400" />
-            <span>PETA</span>
-          </h1>
-          <p className="text-xs uppercase tracking-widest text-slate-300 font-semibold mt-1">Pemanfaatan Data</p>
+        <div className="p-5 border-b border-slate-800">
+          <SenadaLogo size="md" theme="dark" showSubtitle={true} />
         </div>
         
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navOrder.filter(k => k !== 'analytics' && k !== 'tickets').map((tabKey, idx, arr) => {
+          {navOrder.filter(k => k !== 'analytics' && k !== 'tickets' && k !== 'referensi').map((tabKey, idx, arr) => {
             const isMap = tabKey === 'map';
+            const isRef = tabKey === 'referensi';
+            const isSms = tabKey === 'sms';
             const isActive = activeMainTab === tabKey;
-            const label = isMap ? 'Pemetaan Geo' : `Konfigurasi Chart (${dynamicCharts.length})`;
+            const label = isMap ? 'PETA NASIONAL' : isRef ? 'Referensi Filter' : isSms ? 'SMS (Super Mind Senada)' : 'OVERVIEW';
 
             return (
               <div
                 key={tabKey}
                 className={`group relative w-full p-2.5 rounded-lg flex items-center justify-between transition-colors ${
-                  isActive ? 'bg-blue-600/20 text-blue-400 font-medium' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                  isActive 
+                    ? isSms ? 'bg-indigo-600/30 text-indigo-300 font-medium border border-indigo-500/40' : 'bg-blue-600/20 text-blue-400 font-medium'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
                 id={`tab-${tabKey}-button`}
               >
                 <button
                   onClick={() => setActiveMainTab(tabKey as any)}
-                  className="flex items-center space-x-3 text-left flex-1 cursor-pointer py-0.5"
+                  className="flex items-center space-x-2 text-left flex-1 cursor-pointer py-0.5"
                 >
-                  <div className={`w-2 h-2 rounded-full ${isActive ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
-                  <span className="text-sm font-medium">{label}</span>
+                  {isSms ? (
+                    <Sparkles className={`w-4 h-4 shrink-0 ${isActive ? 'text-indigo-400' : 'text-slate-500'}`} />
+                  ) : (
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
+                  )}
+                  <span className="text-sm font-medium truncate">{label}</span>
                 </button>
 
                 <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-0.5 transition-opacity">
@@ -629,8 +893,11 @@ export default function App() {
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-bold text-slate-800">
               {activeMainTab === 'map' ? 'PETA LAYANAN SENADA' :
+               activeMainTab === 'referensi' ? 'Pengaturan Referensi Filter' :
                activeMainTab === 'tickets' ? 'Antrean Laporan & SLA Tindaklanjut' :
-               activeMainTab === 'analytics' ? 'Analitik Performa Layanan Bulanan' : 'Visualisasi Grafik Kustom Dinamis'}
+               activeMainTab === 'analytics' ? 'Analitik Performa Layanan Bulanan' :
+               activeMainTab === 'sms' ? 'SMS (Super Mind Senada) - Rekomendasi Strategis AI' :
+               'Visualisasi Grafik Kustom Dinamis'}
             </h2>
             <span className="hidden sm:inline-block text-slate-300">|</span>
             <span className="hidden sm:inline-block text-xs text-slate-400">WIB / WITA / WIT</span>
@@ -717,6 +984,157 @@ export default function App() {
         {/* WORKSPACE CONTENT ZONE */}
         <div className="p-6 space-y-6 flex-1 overflow-y-auto" id="dashboard-main-content">
           
+          {/* ACTIVE FILTER INDICATOR BANNER */}
+          {(selectedBulan !== 'Semua' || selectedKepwil !== 'Semua' || selectedKantorCabang !== 'Semua') && (
+            <div className="bg-indigo-50/90 border border-indigo-200 rounded-2xl p-3 px-4 flex flex-wrap items-center justify-between gap-3 text-xs animate-fadeIn shadow-3xs">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-extrabold text-indigo-950 flex items-center gap-1.5">
+                  <Filter className="w-4 h-4 text-indigo-600 shrink-0" />
+                  Filter Data Aktif:
+                </span>
+                {selectedBulan !== 'Semua' && (
+                  <span className="bg-white text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 shadow-3xs flex items-center gap-1">
+                    📅 Bulan: <strong>{selectedBulan}</strong>
+                  </span>
+                )}
+                {selectedKepwil !== 'Semua' && (
+                  <span className="bg-white text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 shadow-3xs flex items-center gap-1">
+                    🏛️ KEPWIL: <strong>{selectedKepwil}</strong>
+                  </span>
+                )}
+                {selectedKantorCabang !== 'Semua' && (
+                  <span className="bg-white text-blue-800 font-bold px-2.5 py-1 rounded-lg border border-blue-200 shadow-3xs flex items-center gap-1">
+                    🏢 KC: <strong>{selectedKantorCabang}</strong>
+                  </span>
+                )}
+                <span className="text-slate-500 font-medium ml-1">
+                  ({filteredCitiesForMetrics.length} Baris Data Terpilih)
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedBulan('Semua');
+                  setSelectedKepwil('Semua');
+                  setSelectedKantorCabang('Semua');
+                }}
+                className="text-xs text-rose-600 hover:text-rose-800 font-bold underline cursor-pointer"
+                id="reset-top-banner-filter-btn"
+              >
+                Reset Filter
+              </button>
+            </div>
+          )}
+
+          {/* GLOBAL FILTER BAR FOR OTHER PAGES (ANALYTICS, TICKETS, CUSTOM CHARTS) */}
+          {activeMainTab !== 'map' && activeMainTab !== 'referensi' && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-3.5 sm:p-4 shadow-xs space-y-3 animate-fadeIn transition-all">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsGlobalFilterExpanded(!isGlobalFilterExpanded)}
+                    className="w-8 h-8 rounded-xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 flex items-center justify-center text-indigo-700 cursor-pointer transition-colors shrink-0"
+                    title={isGlobalFilterExpanded ? "Sembunyikan Filter" : "Buka Filter"}
+                    id="global-filter-icon-toggle-btn"
+                  >
+                    <Filter className="w-4 h-4" />
+                  </button>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4 className="text-xs font-black text-slate-800">Filter Menu Halaman</h4>
+                      {/* Active filter summary chips when collapsed or expanded */}
+                      <div className="hidden sm:flex items-center gap-1.5 overflow-x-auto text-[10px]">
+                        <span className="bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md font-semibold text-indigo-800">
+                          Bulan: <strong>{selectedBulan}</strong>
+                        </span>
+                        <span className="bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-semibold text-emerald-800 truncate max-w-[130px]">
+                          KEPWIL: <strong>{selectedKepwil}</strong>
+                        </span>
+                        <span className="bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md font-semibold text-blue-800 truncate max-w-[150px]">
+                          KC: <strong>{selectedKantorCabang}</strong>
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-500">
+                      {isGlobalFilterExpanded ? "Saring data analitik, laporan, dan visualisasi." : "Klik 'Buka Filter' untuk mengubah kriteria penyaringan."}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {(selectedBulan !== 'Semua' || selectedKepwil !== 'Semua' || selectedKantorCabang !== 'Semua') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedBulan('Semua');
+                        setSelectedKepwil('Semua');
+                        setSelectedKantorCabang('Semua');
+                      }}
+                      className="text-xs text-rose-600 hover:text-rose-800 font-bold flex items-center gap-1 cursor-pointer bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span className="hidden md:inline">Reset</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setIsGlobalFilterExpanded(!isGlobalFilterExpanded)}
+                    className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border transition-all cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300 shadow-2xs"
+                    id="toggle-global-filter-btn"
+                  >
+                    <span>{isGlobalFilterExpanded ? 'Sembunyikan' : 'Buka Filter'}</span>
+                    {isGlobalFilterExpanded ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* COLLAPSIBLE CONTROLS */}
+              {isGlobalFilterExpanded && (
+                <div className="pt-3 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-3 animate-fadeIn">
+                  <SearchableFilterSelect
+                    id="global-filter-bulan"
+                    label="1. Filter Periode Bulan"
+                    icon={<Calendar className="w-3.5 h-3.5 text-indigo-600" />}
+                    value={selectedBulan}
+                    onChange={setSelectedBulan}
+                    options={availableBulanList}
+                    allLabel={`Semua Bulan (${availableBulanList.length})`}
+                    colorScheme="indigo"
+                    searchPlaceholder="Cari bulan..."
+                  />
+                  <SearchableFilterSelect
+                    id="global-filter-kepwil"
+                    label="2. Filter KEPWIL"
+                    icon={<Landmark className="w-3.5 h-3.5 text-emerald-600" />}
+                    value={selectedKepwil}
+                    onChange={(val) => {
+                      setSelectedKepwil(val);
+                      setSelectedKantorCabang('Semua');
+                    }}
+                    options={availableKepwilList}
+                    allLabel={`Semua Wilayah (${availableKepwilList.length})`}
+                    colorScheme="emerald"
+                    searchPlaceholder="Cari wilayah..."
+                  />
+                  <SearchableFilterSelect
+                    id="global-filter-kc"
+                    label="3. Filter Kantor Cabang (KC)"
+                    icon={<Building2 className="w-3.5 h-3.5 text-blue-600" />}
+                    value={selectedKantorCabang}
+                    onChange={setSelectedKantorCabang}
+                    groupedOptions={groupedKantorCabang}
+                    options={availableKantorCabangList}
+                    allLabel={`Semua Kantor Cabang (${availableKantorCabangList.length})`}
+                    colorScheme="blue"
+                    searchPlaceholder="Cari Kantor Cabang..."
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           {/* 4-COLUMN SUMMARY METRIC GRID ACCORDING TO EXCEL DATA */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
             
@@ -780,6 +1198,18 @@ export default function App() {
 
           {/* DYNAMIC COMPONENT LOADER BASED ON ACTIVE TAB */}
           <div>
+            {/* VIEW: REFERENCE MANAGER */}
+            {activeMainTab === 'referensi' && (
+              <div className="animate-fadeIn">
+                <ReferenceManager
+                  references={filterReferences}
+                  onReferencesChange={setFilterReferences}
+                  mapSyncConfig={mapSyncConfig}
+                  citiesData={citiesData}
+                />
+              </div>
+            )}
+
             {/* VIEW 1: MAPS AND GEOGRAPHICS */}
             {activeMainTab === 'map' && (
               <div className="animate-fadeIn">
@@ -793,6 +1223,23 @@ export default function App() {
                     setVolumeThresholds(t);
                     saveAppSettingsToCloud({ volumeThresholds: t });
                   }}
+                  syncConfig={mapSyncConfig}
+                  onSyncConfigChange={(cfg) => {
+                    setMapSyncConfig(cfg);
+                    localStorage.setItem('map_sync_config', JSON.stringify(cfg));
+                    if (cfg.sheetUrl) {
+                      setGoogleSheetUrl(cfg.sheetUrl);
+                      localStorage.setItem('google_sheet_sync_url', cfg.sheetUrl);
+                    }
+                    saveMapDataToCloud(citiesData, cfg, true);
+                  }}
+                  selectedBulan={selectedBulan}
+                  onSelectedBulanChange={setSelectedBulan}
+                  selectedKepwil={selectedKepwil}
+                  onSelectedKepwilChange={setSelectedKepwil}
+                  selectedKantorCabang={selectedKantorCabang}
+                  onSelectedKantorCabangChange={setSelectedKantorCabang}
+                  filterReferences={filterReferences}
                 />
               </div>
             )}
@@ -818,43 +1265,67 @@ export default function App() {
               </div>
             )}
 
-            {/* VIEW 4: DYNAMIC CUSTOM CHARTS LIST */}
+            {/* VIEW 4: DYNAMIC CUSTOM CHARTS LIST (OVERVIEW) */}
             {activeMainTab === 'custom-charts' && (
               <div className="space-y-6 animate-fadeIn">
                 
-                {/* INSTRUCTIONS HEADER */}
+                {/* INSTRUCTIONS & SYNC HEADER */}
                 <div className="bg-white border border-slate-200 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm">
                   <div className="space-y-1">
                     <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
                       <BarChart3 className="text-blue-600 h-5 w-5" />
-                      Menu Visualisasi Grafik Kustom Dinamis
+                      Halaman OVERVIEW & Visualisasi Kustom
                     </h3>
-                    <p className="text-xs text-slate-500">
-                      Tambahkan grafik garis, batang, lingkaran, atau wilayah. Hubungkan tiap grafik secara independen ke data sistem lokal atau sinkronisasi dengan link Google Sheet pilihan Anda.
+                    <p className="text-xs text-slate-500 max-w-2xl">
+                      Halaman OVERVIEW ini terhubung penuh secara real-time dengan PETA NASIONAL. Filter periode bulan, KEPWIL, Kantor Cabang, dan aksi sinkronisasi data Google Sheets berlaku otomatis di seluruh halaman.
                     </p>
                   </div>
 
-                  {isAdmin ? (
-                    <button
-                      onClick={handleAddNewChart}
-                      className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-5 rounded-lg text-xs transition-colors shadow-sm shrink-0 flex items-center gap-1.5 cursor-pointer"
-                      id="add-new-chart-inner-button"
-                      title="Tambah Grafik Baru (Admin)"
-                    >
-                      <PlusCircle className="h-4 w-4" />
-                      Tambah Grafik Baru
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => setIsLoginModalOpen(true)}
-                      className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2 px-5 rounded-lg text-xs transition-colors border border-slate-200 shadow-2xs shrink-0 flex items-center gap-1.5 cursor-pointer"
-                      id="add-new-chart-inner-button"
-                      title="Login Admin untuk Menambah Grafik"
-                    >
-                      <Lock className="h-3.5 w-3.5 text-slate-400" />
-                      Tambah Grafik (Admin)
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+                    {isAdmin ? (
+                      <button
+                        onClick={() => handleExecuteSync()}
+                        disabled={isRefreshing}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-xl text-xs transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        title="Sinkronkan data dengan Google Sheets"
+                        id="overview-sync-button"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                        <span>{isRefreshing ? 'Sinkronisasi...' : 'Sync Data'}</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setIsLoginModalOpen(true)}
+                        className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2 px-4 rounded-xl text-xs transition-colors border border-slate-200 shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                        title="Login Admin untuk Sinkronisasi"
+                      >
+                        <Lock className="h-3.5 w-3.5 text-slate-400" />
+                        <span>Sync (Admin)</span>
+                      </button>
+                    )}
+
+                    {isAdmin ? (
+                      <button
+                        onClick={handleAddNewChart}
+                        className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-xl text-xs transition-colors shadow-sm shrink-0 flex items-center gap-1.5 cursor-pointer"
+                        id="add-new-chart-inner-button"
+                        title="Tambah Grafik Baru (Admin)"
+                      >
+                        <PlusCircle className="h-4 w-4" />
+                        Tambah Grafik Baru
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setIsLoginModalOpen(true)}
+                        className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2 px-4 rounded-xl text-xs transition-colors border border-slate-200 shadow-2xs shrink-0 flex items-center gap-1.5 cursor-pointer"
+                        id="add-new-chart-inner-button"
+                        title="Login Admin untuk Menambah Grafik"
+                      >
+                        <Lock className="h-3.5 w-3.5 text-slate-400" />
+                        Tambah Grafik (Admin)
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* DYNAMIC CHARTS BENTO GRID */}
@@ -867,11 +1338,14 @@ export default function App() {
                         onUpdate={handleUpdateChart}
                         onDelete={handleDeleteChart}
                         localMonthlyData={monthlyData}
-                        localCitiesData={citiesData}
+                        localCitiesData={filteredCitiesForMetrics}
                         onExecuteSync={() => handleExecuteSync()}
                         isSyncing={isRefreshing}
                         isAdmin={isAdmin}
                         onRequestAdminLogin={() => setIsLoginModalOpen(true)}
+                        selectedBulan={selectedBulan}
+                        selectedKepwil={selectedKepwil}
+                        selectedKantorCabang={selectedKantorCabang}
                       />
                     ))}
                   </div>
@@ -884,6 +1358,23 @@ export default function App() {
                 )}
 
               </div>
+            )}
+
+            {/* VIEW 5: SMS (SUPER MIND SENADA) REKOMENDASI AI GOOGLE */}
+            {activeMainTab === 'sms' && (
+              <SuperMindSenada
+                citiesData={filteredCitiesForMetrics}
+                selectedBulan={selectedBulan}
+                onSelectedBulanChange={setSelectedBulan}
+                selectedKepwil={selectedKepwil}
+                onSelectedKepwilChange={setSelectedKepwil}
+                selectedKantorCabang={selectedKantorCabang}
+                onSelectedKantorCabangChange={setSelectedKantorCabang}
+                availableBulanList={availableBulanList}
+                availableKepwilList={availableKepwilList}
+                availableKantorCabangList={availableKantorCabangList}
+                groupedKantorCabang={groupedKantorCabang}
+              />
             )}
           </div>
 

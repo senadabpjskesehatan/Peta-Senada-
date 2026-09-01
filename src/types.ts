@@ -15,6 +15,10 @@ export interface CityData {
   total: number;
   avgSlaDays: number;
   slaCompliance: number; // e.g., 90 for 90%
+  bulan?: string;
+  kepwil?: string;
+  kantorCabang?: string;
+  rawRow?: Record<string, any>;
 }
 
 export interface Ticket {
@@ -60,10 +64,24 @@ export interface MonthlyPerformance {
   satisfactionRate: number; // Percentage
 }
 
+export interface FilterReference {
+  id: string;
+  name: string;
+  description?: string;
+  columnName: string;
+  isDynamic?: boolean;
+  manualItems: string[];
+  placements?: string[];
+  showIndicator?: boolean;
+  indicatorLabel?: string;
+}
+
 export interface MapSyncConfig {
   sheetUrl: string;
   sheetId: string;
-  cityColumn: string;
+  cityColumn: string; // KANTOR CABANG mapping
+  bulanColumn?: string; // BULAN mapping
+  kepwilColumn?: string; // KEPWIL mapping
   informasiColumn: string;
   permintaanColumn: string;
   pengaduanColumn: string;
@@ -71,4 +89,29 @@ export interface MapSyncConfig {
   isSynced: boolean;
   lastSyncedAt?: string;
   error?: string;
+}
+
+export interface StrategicRecommendationItem {
+  id: string;
+  title: string;
+  description: string;
+  aspect: 'people' | 'proses' | 'tools';
+  aspectLabel: 'People' | 'Proses' | 'Tools';
+  timeframe: 'pendek' | 'menengah' | 'panjang';
+  timeframeLabel: 'Jangka Pendek (1-3 Bulan)' | 'Jangka Menengah (3-6 Bulan)' | 'Jangka Panjang (6-12+ Bulan)';
+  impactLevel: 'Tinggi' | 'Sedang' | 'Kritis';
+  targetBranch?: string;
+  kpiTarget?: string;
+  actionSteps: string[];
+}
+
+export interface SmsRecommendationResponse {
+  summary: string;
+  kantorCabangTarget: string;
+  kepwilTarget?: string;
+  overallScore: number;
+  healthStatus: 'Optimal' | 'Perlu Perhatian' | 'Kritis';
+  recommendations: StrategicRecommendationItem[];
+  generatedAt: string;
+  isFallback?: boolean;
 }

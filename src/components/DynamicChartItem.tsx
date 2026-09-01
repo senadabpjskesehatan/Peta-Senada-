@@ -3,6 +3,7 @@ import { ResponsiveContainer, LineChart, Line, BarChart, Bar, AreaChart, Area, P
 import { Settings, Trash2, Database, FileSpreadsheet, RotateCw, CheckCircle, AlertCircle, BarChart2, TrendingUp, PieChart as PieIcon, Layers, Shield, Globe, Activity, Target, Award, Zap } from 'lucide-react';
 import { DynamicChart, CityData, MonthlyPerformance } from '../types';
 import { fetchSheetData, parseNumericValue } from '../utils/sheetParser';
+import { isBulanMatching, isKepwilMatching, isKantorCabangMatching } from '../utils/monthHelper';
 
 interface DynamicChartItemProps {
   key?: string;
@@ -15,6 +16,9 @@ interface DynamicChartItemProps {
   isSyncing?: boolean;
   isAdmin?: boolean;
   onRequestAdminLogin?: () => void;
+  selectedBulan?: string;
+  selectedKepwil?: string;
+  selectedKantorCabang?: string;
 }
 
 export default function DynamicChartItem({
@@ -26,7 +30,10 @@ export default function DynamicChartItem({
   onExecuteSync,
   isSyncing = false,
   isAdmin = false,
-  onRequestAdminLogin
+  onRequestAdminLogin,
+  selectedBulan,
+  selectedKepwil,
+  selectedKantorCabang
 }: DynamicChartItemProps) {
   const [showConfig, setShowConfig] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -87,7 +94,8 @@ export default function DynamicChartItem({
     });
 
     return Object.entries(map).map(([_, item]) => {
-      const total = item.informasi + item.permintaan + item.pengaduan;
+      const calculatedTotal = item.informasi + item.permintaan + item.pengaduan;
+      const total = calculatedTotal > 0 ? calculatedTotal : (parseNumericValue(item.extraProps?.total) || 0);
       const avgSla = item.count > 0 ? Math.round(item.slaSum / item.count) : 90;
       const avgSlaDays = item.count > 0 ? Number((item.slaDaysSum / item.count).toFixed(1)) : 2.4;
 
@@ -105,13 +113,48 @@ export default function DynamicChartItem({
     });
   }, [localCitiesData]);
 
+  // Filter synced sheet data if filters are active and matching columns exist
+  const filteredSyncedData = useMemo(() => {
+    if (!chart.syncedData || chart.syncedData.length === 0) return [];
+    return chart.syncedData.filter((row: any) => {
+      let rowBulan = '';
+      let rowKepwil = '';
+      let rowKC = '';
+
+      for (const [k, v] of Object.entries(row)) {
+        const keyLower = k.toLowerCase().trim();
+        const valStr = String(v || '').trim();
+        if (/bulan|month|periode|bln/i.test(keyLower) && !rowBulan) {
+          rowBulan = valStr;
+        }
+        if (/kepwil|kedeputian.*wilayah|kanwil|regional/i.test(keyLower) && !rowKepwil) {
+          rowKepwil = valStr;
+        }
+        if (/kantor.*cabang|kc|cabang|kota|city/i.test(keyLower) && !rowKC) {
+          rowKC = valStr;
+        }
+      }
+
+      if (selectedBulan && selectedBulan !== 'Semua' && rowBulan && !isBulanMatching(rowBulan, selectedBulan)) {
+        return false;
+      }
+      if (selectedKepwil && selectedKepwil !== 'Semua' && rowKepwil && !isKepwilMatching(rowKepwil, selectedKepwil)) {
+        return false;
+      }
+      if (selectedKantorCabang && selectedKantorCabang !== 'Semua' && rowKC && !isKantorCabangMatching(rowKC, selectedKantorCabang)) {
+        return false;
+      }
+      return true;
+    });
+  }, [chart.syncedData, selectedBulan, selectedKepwil, selectedKantorCabang]);
+
   // Determine active dataset based on selection (Default source uses geo-synced dataset from Google Sheets / Geo Mapping)
   const activeDataset = useMemo(() => {
     if (chart.source === 'sheets') {
-      return chart.syncedData || [];
+      return filteredSyncedData;
     }
     return geoSyncedDataset;
-  }, [chart.source, chart.syncedData, geoSyncedDataset]);
+  }, [chart.source, filteredSyncedData, geoSyncedDataset]);
 
   // Extract available columns based on dataset (dynamically derived from geo-synced data)
   const currentColumns = useMemo(() => {

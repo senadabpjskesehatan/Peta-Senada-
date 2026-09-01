@@ -1,10 +1,13 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
+import { GoogleGenAI, Type } from "@google/genai";
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  app.use(express.json({ limit: "10mb" }));
 
   // Endpoint to fetch sheet tabs metadata from a public Google Sheet without API keys
   app.get("/api/get-sheets", async (req, res) => {
@@ -204,6 +207,126 @@ async function startServer() {
     } catch (err: any) {
       console.error("Error in /api/fetch-sheet-csv:", err);
       res.status(500).json({ error: err.message || "Gagal mengambil data CSV." });
+    }
+  });
+
+  // Endpoint for SMS (Super Mind Senada) AI recommendations via Google Gemini
+  app.post("/api/gemini/recommendations", async (req, res) => {
+    try {
+      const { kantorCabang, kepwil, selectedBulan, branchMetrics, citiesSummary } = req.body;
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(200).json({
+          success: false,
+          isFallback: true,
+          message: "GEMINI_API_KEY belum dikonfigurasi di lingkungan server.",
+        });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const bm = branchMetrics || {};
+      const targetName = kantorCabang || bm.branchName || 'Seluruh Kantor Cabang';
+
+      const prompt = `Anda adalah konsultan manajemen strategis dan AI Layanan Publik profesional (Super Mind Senada - SMS).
+Tugas Anda adalah memberikan rekomendasi perbaikan dan strategi operasional yang DIBUAT KHUSUS (TAILORED) UNTUK KANTOR CABANG SINKRON DENGAN DATA KONKRET BERIKUT:
+
+Target Kantor Cabang: ${targetName}
+KEPWIL: ${kepwil || bm.kepwilName || 'Semua'}
+Bulan/Periode: ${selectedBulan || 'Semua'}
+
+DATA SINKRON KINERJA UNIT (${targetName}):
+1. Jumlah Layanan (Total): ${bm.totalLayanan || citiesSummary?.totalInformasi + citiesSummary?.totalPermintaan + citiesSummary?.totalPengaduan || 0} layanan
+2. Penyelesaian SLA: ${bm.slaCompliance || citiesSummary?.avgSla || 0}% Compliance (Rata-rata Durasi SLA: ${bm.avgSlaDays || 2.0} Hari)
+3. Rincian Jumlah Layanan per Kategori:
+   - Layanan Informasi: ${bm.informasi || citiesSummary?.totalInformasi || 0}
+   - Layanan Permintaan: ${bm.permintaan || citiesSummary?.totalPermintaan || 0}
+   - Layanan Pengaduan: ${bm.pengaduan || citiesSummary?.totalPengaduan || 0}
+4. Rincian Pokok Masalah (Root Cause Issues):
+   - Pokok Masalah Administrasi (Kepesertaan/Data): ${bm.administrasi || 0} kasus
+   - Pokok Masalah Iuran (Pembayaran/Tagihan/Autodebet): ${bm.iuran || 0} kasus
+   - Pokok Masalah Pelayanan Kesehatan (Faskes/RS/Klaim): ${bm.pelayananKesehatan || 0} kasus
+
+PERINTAH KHUSUS KONTEN REKOMENDASI:
+- Buat rekomendasi yang UNIK dan BERBEDA-BEDA untuk Kantor Cabang ini!
+- WAJIB menyebutkan angka-angka konkret dari data di atas secara eksplisit pada setiap deskripsi rekomendasi, target KPI, dan langkah tindakan (Jumlah Layanan, % SLA, Informasi, Permintaan, Pengaduan, Administrasi, Iuran, dan Pelayanan Kesehatan).
+- Berikan analisis penyebab dan solusi taktis jika pokok masalah ${bm.dominantPokokMasalah || 'Administrasi'} atau pengaduan tergolong tinggi.
+- LANGKAH TINDAKAN OPERASIONAL (actionSteps) Harus SANGAT KONKRET, PRAKTIS, & SANGAT MUDAH DIPAHAMI:
+  * Tuliskan setiap instruksi tindakan dengan format perintah operasional langsung (Contoh: "Briefing Pagi Jam 07:45: Evaluasi target penyelesaian 15 berkas pengaduan...", "Rotasi Jam Puncak 10:00-14:00: Alihkan 2 staf back-office ke loket bantuan...", "Pasang Banner QR Code 'Cek Status Mandiri' di ruang tunggu...").
+  * Hindari bahasa jargon teoritis yang abstrak. Gunakan langkah 1, 2, 3 yang spesifik, ada angka targetnya, waktu pelaksanaan, dan penanggung jawab yang jelas.
+
+SYARAT WAJIB STRUKTUR OUTPUT:
+1. Rekomendasi dibagi menjadi 3 Tahap Waktu:
+   - Jangka Pendek (1 - 3 Bulan): Taktis, respon cepat, pembenahan antrean & alokasi jam sibuk staf.
+   - Jangka Menengah (3 - 6 Bulan): Standardisasi SOP, capacity building, koordinasi KEPWIL, integrasi tools monitoring.
+   - Jangka Panjang (6 - 12+ Bulan): Transformasi digital penuh, otomatisasi AI Senada, budaya kerja berbasis analitik.
+2. Setiap Tahap Waktu WAJIB mencakup 3 Aspek Utama:
+   - People: SDM, pelatihan empati/krisis, rotasi jam sibuk, budaya layanan, reskilling.
+   - Proses: SOP layanan, alur tindak lanjut pengaduan, fast-track SLA escalation, audit kualitas.
+   - Tools: Perangkat IT, dashboard monitoring Senada, otomatisasi WhatsApp/PWA, Kios Mandiri.
+
+Hasilkan minimal 9 item rekomendasi (3 per Tahap Waktu, mencakup aspek People, Proses, dan Tools).`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.7-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              summary: { type: Type.STRING },
+              overallScore: { type: Type.NUMBER },
+              healthStatus: { type: Type.STRING },
+              recommendations: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    aspect: { type: Type.STRING },
+                    aspectLabel: { type: Type.STRING },
+                    timeframe: { type: Type.STRING },
+                    timeframeLabel: { type: Type.STRING },
+                    impactLevel: { type: Type.STRING },
+                    targetBranch: { type: Type.STRING },
+                    kpiTarget: { type: Type.STRING },
+                    actionSteps: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING }
+                    }
+                  },
+                  required: ["id", "title", "description", "aspect", "aspectLabel", "timeframe", "timeframeLabel", "impactLevel", "actionSteps"]
+                }
+              }
+            },
+            required: ["summary", "overallScore", "healthStatus", "recommendations"]
+          }
+        }
+      });
+
+      const text = response.text || "";
+      const parsed = JSON.parse(text);
+      return res.json({
+        success: true,
+        data: parsed
+      });
+    } catch (err: any) {
+      console.error("Error generating Gemini SMS recommendations:", err);
+      return res.status(500).json({
+        success: false,
+        error: err.message || "Gagal memproses rekomendasi AI Gemini"
+      });
     }
   });
 

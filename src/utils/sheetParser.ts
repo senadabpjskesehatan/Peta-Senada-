@@ -5,11 +5,27 @@ export function parseNumericValue(val: any): number {
   let str = String(val).trim();
   if (!str) return 0;
 
-  // Remove currency symbols (Rp, $, etc.), non-breaking spaces (\u00A0), and extra whitespace
-  str = str.replace(/[Rp$\s\u00A0]/gi, '');
+  // Handle common non-numeric placeholder values
+  if (/^[-–—\s#N\/A]+$/i.test(str) || /^#REF!|#VALUE!|#NAME\?|#NULL!|#DIV\/0!|NaN|null|undefined$/i.test(str)) {
+    return 0;
+  }
 
-  if (/^-?\d+$/.test(str)) {
-    return parseInt(str, 10);
+  // Handle negative numbers wrapped in parenthesis: (123) -> -123
+  let isNegative = false;
+  if (str.startsWith('(') && str.endsWith(')')) {
+    isNegative = true;
+    str = str.slice(1, -1).trim();
+  } else if (str.startsWith('-')) {
+    isNegative = true;
+    str = str.slice(1).trim();
+  }
+
+  // Remove currency symbols (Rp, IDR, $, €, ¥, etc.), non-breaking spaces (\u00A0), percent (%), and extra whitespace
+  str = str.replace(/[RpIDR$€¥%\s\u00A0]/gi, '');
+
+  if (/^\d+$/.test(str)) {
+    const num = parseInt(str, 10);
+    return isNegative ? -num : num;
   }
 
   // Handle formatted number strings
@@ -22,34 +38,38 @@ export function parseNumericValue(val: any): number {
     str = str.replace(/,/g, '');
   }
 
-  // 3. Both dot and comma: "1.041.788,00" or "1,041,788.00"
+  // 3. Both dot and comma present: "1.041.788,50" or "1,041,788.50"
   if (str.includes('.') && str.includes(',')) {
     if (str.lastIndexOf('.') < str.lastIndexOf(',')) {
-      // Indonesian format: 1.041.788,00 -> dot is thousand, comma is decimal
+      // Indonesian / European format: 1.041.788,50 -> dot is thousand, comma is decimal
       str = str.replace(/\./g, '').replace(',', '.');
     } else {
-      // US format: 1,041,788.00 -> comma is thousand, dot is decimal
+      // US format: 1,041,788.50 -> comma is thousand, dot is decimal
       str = str.replace(/,/g, '');
     }
-  } else if (str.includes('.')) {
-    // Single dot, e.g., "1.041" or "1041.788" or "1041.5"
-    const parts = str.split('.');
-    if (parts.length === 2 && parts[1].length === 3 && parts[0].length >= 1) {
-      str = str.replace('.', '');
-    }
   } else if (str.includes(',')) {
-    // Single comma, e.g., "1,041" or "1041,788" or "1041,5"
+    // Single comma, e.g., "1,041" (thousand) vs "98,5" or "12,50" (decimal)
     const parts = str.split(',');
-    if (parts.length === 2 && parts[1].length === 3 && parts[0].length >= 1) {
+    if (parts.length === 2 && parts[1].length === 3 && parts[0].length >= 1 && !/^0+$/.test(parts[0])) {
+      // e.g. "1,234" -> 1234
       str = str.replace(',', '');
     } else {
+      // e.g. "98,5" -> 98.5
       str = str.replace(',', '.');
+    }
+  } else if (str.includes('.')) {
+    // Single dot, e.g., "1.041" (thousand in ID locale) vs "98.5" or "12.50" or "0.123" (decimal)
+    const parts = str.split('.');
+    if (parts.length === 2 && parts[1].length === 3 && parts[0].length >= 1 && parts[0] !== '0') {
+      // e.g. "1.500" -> 1500 in Indonesian thousands
+      str = str.replace('.', '');
     }
   }
 
   const cleaned = str.replace(/[^0-9.-]/g, '');
   const parsed = parseFloat(cleaned);
-  return isNaN(parsed) ? 0 : parsed;
+  if (isNaN(parsed)) return 0;
+  return isNegative ? -parsed : parsed;
 }
 
 export function extractSpreadsheetId(url: string): { spreadsheetId: string | null; gid: string | null } {
@@ -91,15 +111,21 @@ export function parseCSVLine(line: string): string[] {
 export function parseCSV(csvText: string): any[] {
   if (!csvText || !csvText.trim()) return [];
   
-  // Full RFC 4180 CSV parser supporting unlimited rows, columns, and multi-line quotes
-  const rows: string[][] = [];
+  // Strip BOM if present
+  let cleanText = csvText;
+  if (cleanText.charCodeAt(0) === 0xFEFF) {
+    cleanText = cleanText.slice(1);
+  }
+
+  // Full RFC 4180 CSV parser supporting multi-line quotes and unrestricted rows/columns
+  const rawRows: string[][] = [];
   let currentRow: string[] = [];
   let currentCell = '';
   let inQuotes = false;
 
-  for (let i = 0; i < csvText.length; i++) {
-    const char = csvText[i];
-    const nextChar = csvText[i + 1];
+  for (let i = 0; i < cleanText.length; i++) {
+    const char = cleanText[i];
+    const nextChar = cleanText[i + 1];
 
     if (char === '"') {
       if (inQuotes && nextChar === '"') {
@@ -116,9 +142,8 @@ export function parseCSV(csvText: string): any[] {
         i++;
       }
       currentRow.push(currentCell.trim());
-      // Keep row if it has any content
       if (currentRow.some(cell => cell.length > 0)) {
-        rows.push(currentRow);
+        rawRows.push(currentRow);
       }
       currentRow = [];
       currentCell = '';
@@ -130,18 +155,71 @@ export function parseCSV(csvText: string): any[] {
   if (currentCell.length > 0 || currentRow.length > 0) {
     currentRow.push(currentCell.trim());
     if (currentRow.some(cell => cell.length > 0)) {
-      rows.push(currentRow);
+      rawRows.push(currentRow);
     }
   }
 
-  if (rows.length === 0) return [];
+  if (rawRows.length === 0) return [];
 
-  // Deduplicate and sanitize headers for all columns without limits
+  // Intelligent Header Row Detection:
+  // Check the first 5 rows to locate the true header row
+  // (handles cases where row 1 is a title banner or empty subtitle)
+  let headerRowIndex = 0;
+  let maxScore = -1000;
+
+  const headerKeywords = [
+    'no', 'nomor', 'id', 'bulan', 'month', 'periode', 'bln', 'tgl', 'tanggal', 'date',
+    'kepwil', 'wilayah', 'kedeputian', 'kanwil', 'regional',
+    'kantor cabang', 'kantor_cabang', 'kc', 'cabang', 'kota', 'kabupaten', 'nama', 'lokasi', 'daerah',
+    'layanan', 'informasi', 'info', 'permintaan', 'tindakan', 'pengaduan', 'aduan', 'komplain', 'keluhan',
+    'total', 'jumlah', 'grand total', 'sla', 'compliance', 'kepatuhan', 'persen', 'percent', 'target', 'realisasi'
+  ];
+
+  const maxScanRows = Math.min(5, rawRows.length);
+  for (let r = 0; r < maxScanRows; r++) {
+    const row = rawRows[r];
+    const nonEmptyCells = row.filter(c => c && String(c).trim().length > 0);
+    
+    let score = nonEmptyCells.length * 2;
+    let textCellCount = 0;
+    let numCellCount = 0;
+
+    for (const cell of nonEmptyCells) {
+      const cLower = String(cell).toLowerCase().trim();
+      const matchesKeyword = headerKeywords.some(kw => {
+        if (kw.length <= 3) return cLower === kw;
+        return cLower === kw || cLower.includes(kw);
+      });
+
+      if (matchesKeyword) {
+        score += 8;
+      }
+
+      const cleanVal = cLower.replace(/[RpIDR$€¥%\s\u00A0]/g, '');
+      const isNum = /^-?\d+([\.,]\d+)?$/.test(cleanVal);
+      if (isNum) {
+        numCellCount++;
+      } else {
+        textCellCount++;
+      }
+    }
+
+    // A real header row contains column titles (strings), NOT numeric data values
+    score -= numCellCount * 10;
+    score += textCellCount * 3;
+
+    if (score > maxScore) {
+      maxScore = score;
+      headerRowIndex = r;
+    }
+  }
+
+  // Deduplicate and sanitize headers
+  const rawHeaders = rawRows[headerRowIndex];
+  const maxCols = Math.max(...rawRows.slice(headerRowIndex).map(r => r.length));
   const headerCounts: Record<string, number> = {};
-  const rawHeaders = rows[0];
-  const maxCols = Math.max(...rows.map(r => r.length));
-
   const headers: string[] = [];
+
   for (let c = 0; c < maxCols; c++) {
     let raw = (rawHeaders[c] || '').replace(/^"|"$/g, '').replace(/""/g, '"').trim();
     if (!raw) raw = `Kolom_${c + 1}`;
@@ -156,8 +234,8 @@ export function parseCSV(csvText: string): any[] {
   }
 
   const result: any[] = [];
-  for (let r = 1; r < rows.length; r++) {
-    const rowValues = rows[r];
+  for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
+    const rowValues = rawRows[r];
     const obj: any = {};
     let hasData = false;
 
@@ -165,17 +243,24 @@ export function parseCSV(csvText: string): any[] {
       let val = rowValues[colIdx] !== undefined ? rowValues[colIdx] : '';
       val = val.replace(/^"|"$/g, '').replace(/""/g, '"').trim();
 
-      if (val !== '') hasData = true;
+      if (val !== '') {
+        hasData = true;
+        const parsedNum = parseNumericValue(val);
 
-      const parsedNum = parseNumericValue(val);
-      if (val !== '' && !isNaN(Number(val))) {
-        obj[header] = Number(val);
-      } else if (val !== '' && typeof val === 'string' && /^-?[\d.,\s\u00A0Rp$]+$/.test(val) && !isNaN(parsedNum)) {
-        obj[header] = parsedNum;
+        if (/^0\d+$/.test(val)) {
+          // Keep string codes/IDs with leading zeros like "01", "005"
+          obj[header] = val;
+        } else if (/^-?[\d.,\s\u00A0Rp$€¥%]+$/.test(val) && /\d/.test(val)) {
+          obj[header] = parsedNum;
+        } else if (val.toLowerCase() === 'true') {
+          obj[header] = true;
+        } else if (val.toLowerCase() === 'false') {
+          obj[header] = false;
+        } else {
+          obj[header] = val;
+        }
       } else {
-        if (val.toLowerCase() === 'true') obj[header] = true;
-        else if (val.toLowerCase() === 'false') obj[header] = false;
-        else obj[header] = val;
+        obj[header] = '';
       }
     });
 

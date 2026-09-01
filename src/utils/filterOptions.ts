@@ -50,25 +50,48 @@ export function computeFilterOptions(currentCities: CityData[], sheetRawRows: an
   }).map(m => m.label);
 
   // 2. Kepwil list
-  const kepwilSet = new Set<string>();
-  currentCities.forEach(c => {
-    let kw = c.kepwil;
-    if (!kw && c.rawRow && syncConfig.kepwilColumn) kw = String(c.rawRow[syncConfig.kepwilColumn] || '').trim();
-    if (!kw) kw = getKepwilForCity(c.kantorCabang || c.name || '');
-    if (kw) kepwilSet.add(kw);
-  });
-  sheetRawRows.forEach(row => {
-    let kw = '';
-    if (syncConfig.kepwilColumn && row[syncConfig.kepwilColumn]) kw = String(row[syncConfig.kepwilColumn]).trim();
-    if (!kw) {
-      for (const [k, v] of Object.entries(row)) {
-        if (/kepwil|wilayah|kanwil|regional/i.test(k.trim())) { kw = String(v || '').trim(); break; }
+  const explicitKepwilSet = new Set<string>();
+
+  const extractExplicitKepwil = (row: any): string => {
+    if (!row) return '';
+    if (syncConfig.kepwilColumn && row[syncConfig.kepwilColumn] !== undefined) {
+      const v = String(row[syncConfig.kepwilColumn]).trim();
+      if (v) return v;
+    }
+    for (const [k, v] of Object.entries(row)) {
+      if (/kepwil|kedeputian|wilayah|kanwil|regional/i.test(k.trim()) && !/cabang|kc/i.test(k.trim())) {
+        const val = String(v || '').trim();
+        if (val) return val;
       }
     }
-    if (kw) kepwilSet.add(kw);
+    return '';
+  };
+
+  currentCities.forEach(c => {
+    let kw = extractExplicitKepwil(c.rawRow);
+    if (!kw && c.kepwil) kw = c.kepwil.trim();
+    if (kw) explicitKepwilSet.add(kw);
   });
 
-  const availableKepwilList = kepwilSet.size === 0 ? [
+  sheetRawRows.forEach(row => {
+    const kw = extractExplicitKepwil(row);
+    if (kw) explicitKepwilSet.add(kw);
+  });
+
+  const kepwilSet = new Set<string>();
+
+  if (explicitKepwilSet.size > 0) {
+    // Dataset has explicit Kepwil column data: use ONLY explicit values
+    explicitKepwilSet.forEach(k => kepwilSet.add(k));
+  } else if (currentCities.length > 0) {
+    // No explicit Kepwil column found in dataset: fallback to inferring from city names
+    currentCities.forEach(c => {
+      const kw = getKepwilForCity(c.kantorCabang || c.name || '');
+      if (kw) kepwilSet.add(kw);
+    });
+  }
+
+  const availableKepwilList = kepwilSet.size === 0 && currentCities.length === 0 ? [
     'KEPWIL I - Aceh & Sumatera Utara',
     'KEPWIL II - Riau, Kepri, Sumbar & Jambi',
     'KEPWIL III - Sumsel, Babel, Bengkulu & Lampung',

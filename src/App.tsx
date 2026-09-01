@@ -324,7 +324,7 @@ export default function App() {
         }
       }
       if (!rowKepwil) rowKepwil = (c.kepwil || '').trim();
-      if (!rowKepwil) rowKepwil = getKepwilForCity(c.kantorCabang || c.name || '');
+      if (!rowKepwil && !mapSyncConfig.kepwilColumn) rowKepwil = getKepwilForCity(c.kantorCabang || c.name || '');
 
       let rowKC = '';
       if (c.rawRow) {
@@ -505,6 +505,31 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('indonesia_map_filter_references', JSON.stringify(filterReferences));
   }, [filterReferences]);
+
+  // Keep filterReferences column names automatically synchronized with mapSyncConfig
+  useEffect(() => {
+    if (mapSyncConfig && mapSyncConfig.isSynced) {
+      setFilterReferences(prev => {
+        let changed = false;
+        const updated = prev.map(ref => {
+          if ((ref.id === 'ref_kepwil' || /kepwil/i.test(ref.name)) && mapSyncConfig.kepwilColumn && ref.columnName !== mapSyncConfig.kepwilColumn) {
+            changed = true;
+            return { ...ref, columnName: mapSyncConfig.kepwilColumn };
+          }
+          if ((ref.id === 'ref_bulan' || /bulan/i.test(ref.name)) && mapSyncConfig.bulanColumn && ref.columnName !== mapSyncConfig.bulanColumn) {
+            changed = true;
+            return { ...ref, columnName: mapSyncConfig.bulanColumn };
+          }
+          if ((ref.id === 'ref_kc' || /kantor\s*cabang|kc/i.test(ref.name)) && mapSyncConfig.cityColumn && ref.columnName !== mapSyncConfig.cityColumn) {
+            changed = true;
+            return { ...ref, columnName: mapSyncConfig.cityColumn };
+          }
+          return ref;
+        });
+        return changed ? updated : prev;
+      });
+    }
+  }, [mapSyncConfig?.isSynced, mapSyncConfig?.kepwilColumn, mapSyncConfig?.bulanColumn, mapSyncConfig?.cityColumn]);
 
   // Google Sheet Auto-Sync & Interval States
   const [syncInterval, setSyncInterval] = useState<'manual' | '15m' | '30m' | '1h' | '1d'>(() => {

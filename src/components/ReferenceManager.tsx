@@ -116,16 +116,18 @@ export default function ReferenceManager({ references, onReferencesChange, mapSy
                 {/* 2. KOLOM REFERENSI GOOGLE SHEET */}
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Kolom Referensi Google Sheet</label>
-                    {isSynced ? (
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Kolom Referensi Google Sheet / Data Sinkron</label>
+                    {isSynced || availableColumns.length > 0 ? (
                       <select
-                        value={editForm.columnName || ''}
+                        value={editForm.columnName || (editForm.id === 'ref_kepwil' ? mapSyncConfig?.kepwilColumn : '') || ''}
                         onChange={e => setEditForm({ ...editForm, columnName: e.target.value })}
                         className="w-full text-sm border-slate-200 rounded-lg focus:ring-emerald-500 focus:border-emerald-500 bg-white"
                       >
                         <option value="">-- Pilih Kolom dari Google Sheet --</option>
                         {availableColumns.map(col => (
-                          <option key={col} value={col}>📊 {col}</option>
+                          <option key={col} value={col}>
+                            {col === mapSyncConfig?.kepwilColumn ? '🏛️ (Acuan KEPWIL) ' : '📊 '} {col}
+                          </option>
                         ))}
                       </select>
                     ) : (
@@ -137,7 +139,9 @@ export default function ReferenceManager({ references, onReferencesChange, mapSy
                       </select>
                     )}
                     <p className="text-[10px] text-slate-400 mt-1">
-                      {isSynced ? `Tersedia ${availableColumns.length} kolom dari data tersinkron.` : 'Sinkronkan Google Sheet terlebih dahulu untuk mengaktifkan pilihan kolom.'}
+                      {isSynced || availableColumns.length > 0
+                        ? `Tersedia ${availableColumns.length} kolom dari data tersinkron.${mapSyncConfig?.kepwilColumn ? ` Kolom KEPWIL terdeteksi: "${mapSyncConfig.kepwilColumn}".` : ''}`
+                        : 'Sinkronkan Google Sheet terlebih dahulu untuk mengaktifkan pilihan kolom.'}
                     </p>
                   </div>
                 </div>

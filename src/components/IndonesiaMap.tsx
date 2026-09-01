@@ -350,19 +350,23 @@ export default function IndonesiaMap({
     return sorted.map(m => m.label);
   }, [currentCities, sheetRawRows, syncConfig.bulanColumn]);
 
-  // Extract distinct KEPWIL values from current dataset & raw rows
+  // Extract distinct KEPWIL values strictly from current dataset & raw rows
   const availableKepwilList = useMemo(() => {
-    const set = new Set<string>();
+    const explicitSet = new Set<string>();
+
     if (currentCities && currentCities.length > 0) {
       currentCities.forEach(c => {
         const rowBulan = getCityBulan(c);
         if (selectedBulan !== 'Semua' && !isBulanMatching(rowBulan, selectedBulan)) {
           return;
         }
-        const kw = getCityKepwil(c);
-        if (kw) set.add(kw);
+        let kw = '';
+        if (c.rawRow) kw = extractKepwilFromRawRow(c.rawRow);
+        if (!kw && c.kepwil) kw = c.kepwil.trim();
+        if (kw) explicitSet.add(kw);
       });
     }
+
     if (sheetRawRows && sheetRawRows.length > 0) {
       sheetRawRows.forEach(row => {
         let rowBulan = '';
@@ -375,33 +379,31 @@ export default function IndonesiaMap({
         if (selectedBulan !== 'Semua' && !isBulanMatching(rowBulan, selectedBulan)) {
           return;
         }
-        let kwFound = false;
-        if (syncConfig.kepwilColumn && row[syncConfig.kepwilColumn] !== undefined) {
-          const val = String(row[syncConfig.kepwilColumn]).trim();
-          if (val) { set.add(val); kwFound = true; }
-        }
-        if (!kwFound) {
-          for (const [k, v] of Object.entries(row)) {
-            if (/^kepwil$/i.test(k.trim())) {
-              const val = String(v || '').trim();
-              if (val) { set.add(val); kwFound = true; break; }
-            }
-          }
-        }
-        if (!kwFound) {
-          for (const [k, v] of Object.entries(row)) {
-            if (/kepwil|kedeputian.*wilayah|kantor.*wilayah|wilayah|kanwil|regional/i.test(k.trim())) {
-              const val = String(v || '').trim();
-              if (val) { set.add(val); break; }
-            }
-          }
-        }
+        const kw = extractKepwilFromRawRow(row);
+        if (kw) explicitSet.add(kw);
       });
     }
 
-    const result = Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const finalSet = new Set<string>();
 
-    if (result.length === 0) {
+    if (explicitSet.size > 0) {
+      // Use strictly explicit Kepwil values from the dataset column
+      explicitSet.forEach(k => finalSet.add(k));
+    } else if (currentCities && currentCities.length > 0) {
+      // Fallback: no explicit Kepwil column in dataset -> infer from city names
+      currentCities.forEach(c => {
+        const rowBulan = getCityBulan(c);
+        if (selectedBulan !== 'Semua' && !isBulanMatching(rowBulan, selectedBulan)) {
+          return;
+        }
+        const kw = getKepwilForCity(c.kantorCabang || c.name || '');
+        if (kw) finalSet.add(kw);
+      });
+    }
+
+    const result = Array.from(finalSet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    if (result.length === 0 && (!currentCities || currentCities.length === 0)) {
       return [
         'KEPWIL I - Aceh & Sumatera Utara',
         'KEPWIL II - Riau, Kepri, Sumbar & Jambi',
@@ -614,15 +616,52 @@ export default function IndonesiaMap({
     return uniqueCities.filter(c => {
       // Check dynamic filters
       for (const ref of activeFilters) {
-        const expectedVal = dynamicFilterStates[ref.id].toLowerCase();
+        const expectedVal = dynamicFilterStates[ref.id];
+        if (!expectedVal || expectedVal === 'Semua') continue;
+
+        const isKepwilRef = ref.id === 'ref_kepwil' || /kepwil/i.test(ref.name);
+        const isBulanRef = ref.id === 'ref_bulan' || /bulan/i.test(ref.name);
+        const isKCRef = ref.id === 'ref_kc' || /kantor\s*cabang|kc/i.test(ref.name);
+
+        if (isKepwilRef) {
+          const rowKepwil = extractKepwilFromRawRow(c.rawRow) || c.kepwil || getKepwilForCity(c.kantorCabang || c.name || '');
+          if (!isKepwilMatching(rowKepwil, expectedVal)) {
+            return false;
+          }
+          continue;
+        }
+
+        if (isBulanRef) {
+          const rowBulan = getCityBulan(c);
+          if (!isBulanMatching(rowBulan, expectedVal)) {
+            return false;
+          }
+          continue;
+        }
+
+        if (isKCRef) {
+          const rowKC = getCityKC(c);
+          if (!isKantorCabangMatching(rowKC, expectedVal)) {
+            return false;
+          }
+          continue;
+        }
+
         let actualVal = '';
-        
-        // If rawRow exists, try to get the column value directly
-        if (c.rawRow && ref.columnName && c.rawRow[ref.columnName] !== undefined) {
-          actualVal = String(c.rawRow[ref.columnName]).toLowerCase().trim();
-        } 
-        
-        if (actualVal !== expectedVal) {
+        if (c.rawRow) {
+          if (ref.columnName && c.rawRow[ref.columnName] !== undefined) {
+            actualVal = String(c.rawRow[ref.columnName]).trim();
+          } else if (ref.columnName) {
+            for (const [k, v] of Object.entries(c.rawRow)) {
+              if (k.trim().toLowerCase() === ref.columnName.trim().toLowerCase()) {
+                actualVal = String(v || '').trim();
+                break;
+              }
+            }
+          }
+        }
+
+        if (actualVal.toLowerCase() !== expectedVal.toLowerCase()) {
           return false;
         }
       }
@@ -997,7 +1036,7 @@ export default function IndonesiaMap({
           }
         }
       }
-      if (!rawKepwil) {
+      if (!rawKepwil && !matchedKepwil) {
         rawKepwil = getKepwilForCity(rawName);
       }
 

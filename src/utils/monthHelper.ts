@@ -188,70 +188,83 @@ export function parseMonthValue(val: any): ParsedMonth | null {
 }
 
 /**
- * Helper to match any row's bulan value with the selected filter
+ * Helper to parse single or multiple filter values into an array of non-Semua strings
  */
-export function isBulanMatching(rowBulanVal: any, filterBulan: string): boolean {
-  if (!filterBulan || filterBulan === 'Semua') return true;
-  if (rowBulanVal === null || rowBulanVal === undefined || rowBulanVal === '') return false;
-
-  const rowParsed = parseMonthValue(rowBulanVal);
-  const filterParsed = parseMonthValue(filterBulan);
-
-  if (rowParsed && filterParsed) {
-    return rowParsed.mm === filterParsed.mm;
+export function parseFilterValueList(filterVal: string | string[] | undefined | null): string[] {
+  if (!filterVal) return [];
+  if (Array.isArray(filterVal)) {
+    return filterVal.filter(item => Boolean(item) && item !== 'Semua');
   }
-
-  const rStr = String(rowBulanVal).trim().toLowerCase();
-  const fStr = String(filterBulan).trim().toLowerCase();
-
-  return rStr === fStr;
+  if (filterVal === 'Semua') return [];
+  if (typeof filterVal === 'string' && filterVal.includes(',')) {
+    return filterVal.split(',').map(s => s.trim()).filter(s => Boolean(s) && s !== 'Semua');
+  }
+  return [String(filterVal).trim()].filter(s => Boolean(s) && s !== 'Semua');
 }
 
 /**
- * Helper to match any row's KEPWIL value with the selected filter
+ * Helper to match any row's bulan value with the selected filter (supports single or multi-select checklist)
  */
-export function isKepwilMatching(rowKepwilVal: any, filterKepwil: string): boolean {
-  if (!filterKepwil || filterKepwil === 'Semua') return true;
+export function isBulanMatching(rowBulanVal: any, filterBulan: string | string[]): boolean {
+  const selectedList = parseFilterValueList(filterBulan);
+  if (selectedList.length === 0) return true;
+  if (rowBulanVal === null || rowBulanVal === undefined || rowBulanVal === '') return false;
+
+  const rowParsed = parseMonthValue(rowBulanVal);
+
+  return selectedList.some(target => {
+    const filterParsed = parseMonthValue(target);
+    if (rowParsed && filterParsed) {
+      if (rowParsed.mm === filterParsed.mm) return true;
+    }
+    const rStr = String(rowBulanVal).trim().toLowerCase();
+    const fStr = String(target).trim().toLowerCase();
+    return rStr === fStr || rStr.includes(fStr) || fStr.includes(rStr);
+  });
+}
+
+/**
+ * Helper to match any row's KEPWIL value with the selected filter (supports single or multi-select checklist)
+ */
+export function isKepwilMatching(rowKepwilVal: any, filterKepwil: string | string[]): boolean {
+  const selectedList = parseFilterValueList(filterKepwil);
+  if (selectedList.length === 0) return true;
   if (!rowKepwilVal) return false;
 
   const rStr = String(rowKepwilVal).trim().toLowerCase();
-  const fStr = String(filterKepwil).trim().toLowerCase();
 
-  if (rStr === fStr) return true;
-
-  // Extract Roman numeral or digits from KEPWIL
-  // e.g. "KEPWIL IV", "Kedeputian Wilayah IV (DKI Jakarta & Banten)", "KEPWIL IV - DKI Jakarta & Banten"
   const extractKepwilKey = (s: string) => {
     const romanMatch = s.match(/\b(XI|XII|VIII|VII|VI|IV|IX|III|II|V|X|I|\d+)\b/i);
     return romanMatch ? romanMatch[1].toUpperCase() : null;
   };
-
   const rKey = extractKepwilKey(rStr);
-  const fKey = extractKepwilKey(fStr);
 
-  if (rKey && fKey && rKey === fKey) {
-    return true;
-  }
-
-  return rStr.includes(fStr) || fStr.includes(rStr);
+  return selectedList.some(target => {
+    const fStr = String(target).trim().toLowerCase();
+    if (rStr === fStr) return true;
+    const fKey = extractKepwilKey(fStr);
+    if (rKey && fKey && rKey === fKey) return true;
+    return rStr.includes(fStr) || fStr.includes(rStr);
+  });
 }
 
 /**
- * Helper to match any row's Kantor Cabang / KC value with the selected filter
+ * Helper to match any row's Kantor Cabang / KC value with the selected filter (supports single or multi-select checklist)
  */
-export function isKantorCabangMatching(rowKCVal: any, filterKC: string): boolean {
-  if (!filterKC || filterKC === 'Semua') return true;
+export function isKantorCabangMatching(rowKCVal: any, filterKC: string | string[]): boolean {
+  const selectedList = parseFilterValueList(filterKC);
+  if (selectedList.length === 0) return true;
   if (!rowKCVal) return false;
 
   const rStr = String(rowKCVal).trim().toLowerCase();
-  const fStr = String(filterKC).trim().toLowerCase();
-
-  if (rStr === fStr) return true;
-
   const cleanRow = rStr.replace(/^(kantor\s*cabang|kc|cabang)\s+/i, '').trim();
-  const cleanFilter = fStr.replace(/^(kantor\s*cabang|kc|cabang)\s+/i, '').trim();
 
-  return cleanRow === cleanFilter || cleanRow.includes(cleanFilter) || cleanFilter.includes(cleanRow);
+  return selectedList.some(target => {
+    const fStr = String(target).trim().toLowerCase();
+    if (rStr === fStr) return true;
+    const cleanFilter = fStr.replace(/^(kantor\s*cabang|kc|cabang)\s+/i, '').trim();
+    return cleanRow === cleanFilter || cleanRow.includes(cleanFilter) || cleanFilter.includes(cleanRow);
+  });
 }
 
 /**

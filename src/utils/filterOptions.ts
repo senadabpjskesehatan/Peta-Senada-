@@ -7,7 +7,7 @@ export interface SearchableOptionGroup {
   items: string[];
 }
 
-export function computeFilterOptions(currentCities: CityData[], sheetRawRows: any[] = [], syncConfig: MapSyncConfig, selectedBulan: string = 'Semua', selectedKepwil: string = 'Semua') {
+export function computeFilterOptions(currentCities: CityData[], sheetRawRows: any[] = [], syncConfig: MapSyncConfig, selectedBulan: string | string[] = 'Semua', selectedKepwil: string | string[] = 'Semua') {
   // 1. Bulan list
   const monthMap = new Map<string, { label: string; monthIndex: number }>();
   const processRawBulan = (raw: string) => {

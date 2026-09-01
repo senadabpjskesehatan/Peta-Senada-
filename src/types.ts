@@ -34,6 +34,8 @@ export interface Ticket {
   slaStatus: SlaStatus;
 }
 
+export type DataLabelMode = 'none' | 'value' | 'percent';
+
 export interface DynamicChart {
   id: string;
   title: string;
@@ -51,6 +53,8 @@ export interface DynamicChart {
   lastSyncedAt?: string;
   syncedData?: any[];
   columns?: string[];
+  showDataLabels?: boolean;
+  dataLabelMode?: DataLabelMode;
   error?: string;
 }
 

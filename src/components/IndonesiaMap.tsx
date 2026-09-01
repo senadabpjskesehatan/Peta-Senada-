@@ -5,7 +5,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { CityData, MapSyncConfig, FilterReference } from '../types';
 import { fetchSheetData, extractSpreadsheetId, parseCSV, parseNumericValue } from '../utils/sheetParser';
-import { parseMonthValue, formatMonthToMM, formatMonthDisplay, isBulanMatching, isKepwilMatching, isKantorCabangMatching, INDONESIAN_MONTH_NAMES } from '../utils/monthHelper';
+import { parseMonthValue, formatMonthToMM, formatMonthDisplay, isBulanMatching, isKepwilMatching, isKantorCabangMatching, parseFilterValueList, INDONESIAN_MONTH_NAMES } from '../utils/monthHelper';
 import { DEFAULT_CITIES, SAMPLE_SHEETS_CSV } from '../data/defaultData';
 import { INDONESIAN_CITIES_COORDINATES, findCityCoordinates, getIslandForCity, getKepwilForCity } from '../data/defaultData';
 import SearchableFilterSelect, { SearchableOptionGroup } from './SearchableFilterSelect';
@@ -20,12 +20,12 @@ interface IndonesiaMapProps {
   onVolumeThresholdsChange?: (thresholds: { rendahMax: number; sedangMax: number; tinggiMax: number }) => void;
   syncConfig?: MapSyncConfig;
   onSyncConfigChange?: (cfg: MapSyncConfig) => void;
-  selectedBulan?: string;
-  onSelectedBulanChange?: (bulan: string) => void;
-  selectedKepwil?: string;
-  onSelectedKepwilChange?: (kepwil: string) => void;
-  selectedKantorCabang?: string;
-  onSelectedKantorCabangChange?: (kc: string) => void;
+  selectedBulan?: string | string[];
+  onSelectedBulanChange?: (bulan: string | string[]) => void;
+  selectedKepwil?: string | string[];
+  onSelectedKepwilChange?: (kepwil: string | string[]) => void;
+  selectedKantorCabang?: string | string[];
+  onSelectedKantorCabangChange?: (kc: string | string[]) => void;
   filterReferences?: FilterReference[];
 }
 
@@ -145,25 +145,25 @@ export default function IndonesiaMap({
   // Ranking metric state for Top 10 & Bottom 10
   const [rankingMetric, setRankingMetric] = useState<'total' | 'informasi' | 'permintaan' | 'pengaduan' | 'slaCompliance'>('total');
 
-  // 3 Menu Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang)
-  const [internalBulan, setInternalBulan] = useState<string>('Semua');
-  const [internalKepwil, setInternalKepwil] = useState<string>('Semua');
-  const [internalKantorCabang, setInternalKantorCabang] = useState<string>('Semua');
+  // 3 Menu Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang - supports multi-select checklist)
+  const [internalBulan, setInternalBulan] = useState<string | string[]>('Semua');
+  const [internalKepwil, setInternalKepwil] = useState<string | string[]>('Semua');
+  const [internalKantorCabang, setInternalKantorCabang] = useState<string | string[]>('Semua');
 
   const selectedBulan = propSelectedBulan !== undefined ? propSelectedBulan : internalBulan;
-  const setSelectedBulan = (b: string) => {
+  const setSelectedBulan = (b: string | string[]) => {
     setInternalBulan(b);
     onSelectedBulanChange?.(b);
   };
 
   const selectedKepwil = propSelectedKepwil !== undefined ? propSelectedKepwil : internalKepwil;
-  const setSelectedKepwil = (k: string) => {
+  const setSelectedKepwil = (k: string | string[]) => {
     setInternalKepwil(k);
     onSelectedKepwilChange?.(k);
   };
 
   const selectedKantorCabang = propSelectedKantorCabang !== undefined ? propSelectedKantorCabang : internalKantorCabang;
-  const setSelectedKantorCabang = (kc: string) => {
+  const setSelectedKantorCabang = (kc: string | string[]) => {
     setInternalKantorCabang(kc);
     onSelectedKantorCabangChange?.(kc);
   };
@@ -791,20 +791,26 @@ export default function IndonesiaMap({
       const dotColor = getPointColor(city.total);
 
       const opacity = (matchesIsland && matchesSearch) ? 1 : 0.15;
-      const dotSize = isSelected ? 12 : (query && matchesSearch ? 11 : 9);
+
+      // Calculate compact dot size (reduced ~70% from previous, clean dots without numbers)
+      const minSize = 6;
+      const maxSize = 11;
+      const baseSize = Math.min(maxSize, Math.max(minSize, Math.round(5 + Math.sqrt(Math.max(0, city.total)) * 0.25)));
+      const dotSize = isSelected ? baseSize + 3 : (query && matchesSearch ? baseSize + 2 : baseSize);
+      const iconBox = dotSize + 12; // Compact padding container
 
       const icon = L.divIcon({
         className: 'custom-kc-leaflet-marker',
         html: `
-          <div style="opacity: ${opacity}; transition: all 0.2s;" class="relative flex items-center justify-center cursor-pointer">
-            ${isSelected || (query && matchesSearch) ? `<div style="background-color: ${dotColor};" class="absolute -inset-2 rounded-full animate-ping opacity-75"></div>` : ''}
-            <div style="width: ${dotSize}px; height: ${dotSize}px; background-color: ${dotColor};" 
-                 class="relative rounded-full shadow-md border-2 border-white transform hover:scale-150 transition-all duration-200">
+          <div style="opacity: ${opacity}; width: ${iconBox}px; height: ${iconBox}px; transition: all 0.2s;" class="relative flex items-center justify-center cursor-pointer">
+            ${isSelected || (query && matchesSearch) ? `<div style="background-color: ${dotColor};" class="absolute inset-0.5 rounded-full animate-ping opacity-60"></div>` : ''}
+            <div style="width: ${dotSize}px; height: ${dotSize}px; background-color: ${dotColor}; border-width: 1.5px;" 
+                 class="relative rounded-full shadow-md border-white transform hover:scale-150 transition-all duration-200">
             </div>
           </div>
         `,
-        iconSize: [dotSize, dotSize],
-        iconAnchor: [dotSize / 2, dotSize / 2],
+        iconSize: [iconBox, iconBox],
+        iconAnchor: [iconBox / 2, iconBox / 2],
       });
 
       const marker = L.marker([city.latitude, city.longitude], { icon });
@@ -812,13 +818,13 @@ export default function IndonesiaMap({
       // Clean Tooltip for Region Name (Keterangan nama daerah)
       marker.bindTooltip(`
         <div class="px-2 py-1 font-sans text-xs font-bold text-slate-800 flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full" style="background-color: ${dotColor}"></span>
+          <span class="w-2.5 h-2.5 rounded-full shadow-sm" style="background-color: ${dotColor}"></span>
           <span>KC ${city.name}</span>
           <span class="text-[10px] px-1.5 py-0.2 bg-slate-100 rounded text-slate-600 font-mono font-bold">${city.total}</span>
         </div>
       `, {
         direction: 'top',
-        offset: [0, -6],
+        offset: [0, -Math.round(dotSize / 2 + 4)],
         className: 'custom-leaflet-tooltip bg-white shadow-md border border-slate-200 rounded-lg p-0 overflow-hidden'
       });
 
@@ -1483,9 +1489,9 @@ export default function IndonesiaMap({
            !/^(bulan|kepwil|kantor cabang|kantor\s*cabang)$/i.test(ref.name)
   );
 
-  const isAnyFilterActive = selectedBulan !== 'Semua' || 
-    selectedKepwil !== 'Semua' || 
-    selectedKantorCabang !== 'Semua' || 
+  const isAnyFilterActive = parseFilterValueList(selectedBulan).length > 0 || 
+    parseFilterValueList(selectedKepwil).length > 0 || 
+    parseFilterValueList(selectedKantorCabang).length > 0 || 
     Object.values(dynamicFilterStates).some(val => val && val !== 'Semua');
 
   const handleResetAllFilters = () => {
@@ -1529,13 +1535,13 @@ export default function IndonesiaMap({
                   {/* Active filter summary chips */}
                   <div className="hidden sm:flex items-center gap-1.5 overflow-x-auto text-[10px]">
                     <span className="bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md font-semibold text-indigo-800">
-                      Bulan: <strong>{selectedBulan}</strong>
+                      Bulan: <strong>{parseFilterValueList(selectedBulan).length > 0 ? parseFilterValueList(selectedBulan).join(', ') : 'Semua'}</strong>
                     </span>
                     <span className="bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-semibold text-emerald-800 truncate max-w-[130px]">
-                      KEPWIL: <strong>{selectedKepwil}</strong>
+                      KEPWIL: <strong>{parseFilterValueList(selectedKepwil).length > 0 ? parseFilterValueList(selectedKepwil).join(', ') : 'Semua'}</strong>
                     </span>
                     <span className="bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md font-semibold text-blue-800 truncate max-w-[150px]">
-                      KC: <strong>{selectedKantorCabang}</strong>
+                      KC: <strong>{parseFilterValueList(selectedKantorCabang).length > 0 ? parseFilterValueList(selectedKantorCabang).join(', ') : 'Semua'}</strong>
                     </span>
                   </div>
                 </div>
@@ -2077,18 +2083,18 @@ export default function IndonesiaMap({
                     );
                   }
 
-                  const radius = Math.min(22, Math.max(7, Math.sqrt(city.total) * 0.95));
+                  const radius = Math.min(6, Math.max(3, Math.round(2.5 + Math.sqrt(Math.max(0, city.total)) * 0.12)));
 
                   return (
                     <g key={city.id} className="cursor-pointer" onClick={() => setSelectedCityId(city.id)}>
                       <circle
                         cx={x}
                         cy={y}
-                        r={radius + (isSelected ? 7 : 4)}
+                        r={radius + (isSelected ? 3 : 2)}
                         fill={dotColor}
                         fillOpacity={isSelected ? 0.45 : 0.2}
                         stroke={dotColor}
-                        strokeWidth={isSelected ? 2.5 : 0}
+                        strokeWidth={isSelected ? 1.5 : 0}
                         className={isSelected ? 'animate-ping origin-center' : ''}
                       />
                       
@@ -2099,16 +2105,8 @@ export default function IndonesiaMap({
                         fill={dotColor}
                         fillOpacity={isSelected ? 1.0 : 0.85}
                         stroke="#ffffff"
-                        strokeWidth={2}
-                        className="transition-all duration-200 hover:scale-120 hover:stroke-indigo-50"
-                      />
-
-                      <circle
-                        cx={x}
-                        cy={y}
-                        r={3}
-                        fill="#ffffff"
-                        fillOpacity={0.9}
+                        strokeWidth={1.5}
+                        className="transition-all duration-200 hover:scale-150 hover:stroke-indigo-50 shadow-sm"
                       />
 
                       {(isSelected || city.total > 150 || selectedIsland !== 'Semua') && (

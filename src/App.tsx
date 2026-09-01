@@ -31,7 +31,8 @@ import {
   Calendar,
   Landmark,
   Building2,
-  RotateCcw
+  RotateCcw,
+  Hash
 } from 'lucide-react';
 
 import { CityData, Ticket, MonthlyPerformance, DynamicChart, MapSyncConfig, FilterReference } from './types';
@@ -39,7 +40,7 @@ import SearchableFilterSelect from './components/SearchableFilterSelect';
 import { computeFilterOptions } from './utils/filterOptions';
 import { DEFAULT_CITIES, DEFAULT_TICKETS, MONTHLY_PERFORMANCE, DEFAULT_CHARTS, SAMPLE_SHEETS_CSV, findCityCoordinates, getKepwilForCity } from './data/defaultData';
 import { parseNumericValue, fetchSheetData, parseCSV } from './utils/sheetParser';
-import { isBulanMatching, isKepwilMatching, isKantorCabangMatching, parseMonthValue } from './utils/monthHelper';
+import { isBulanMatching, isKepwilMatching, isKantorCabangMatching, parseMonthValue, parseFilterValueList } from './utils/monthHelper';
 import SuperMindSenada from './components/SuperMindSenada';
 import {
   subscribeToAppSettings,
@@ -278,10 +279,10 @@ export default function App() {
     }
   }, [dynamicCharts]);
 
-  // 3 Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang)
-  const [selectedBulan, setSelectedBulan] = useState<string>('Semua');
-  const [selectedKepwil, setSelectedKepwil] = useState<string>('Semua');
-  const [selectedKantorCabang, setSelectedKantorCabang] = useState<string>('Semua');
+  // 3 Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang - supports multi-select checklist)
+  const [selectedBulan, setSelectedBulan] = useState<string | string[]>('Semua');
+  const [selectedKepwil, setSelectedKepwil] = useState<string | string[]>('Semua');
+  const [selectedKantorCabang, setSelectedKantorCabang] = useState<string | string[]>('Semua');
 
   // Filtered dataset for global metrics calculation according to active dropdown filters
   const filteredCitiesForMetrics = useMemo(() => {
@@ -450,6 +451,19 @@ export default function App() {
   // Delete custom chart
   const handleDeleteChart = (chartId: string) => {
     const updatedCharts = dynamicCharts.filter(c => c.id !== chartId);
+    setDynamicCharts(updatedCharts);
+    saveDynamicChartsToCloud(updatedCharts);
+  };
+
+  // Toggle data numbers/labels across all custom charts
+  const handleToggleAllDataLabels = () => {
+    const allShown = dynamicCharts.length > 0 && dynamicCharts.every(c => (c.dataLabelMode || (c.showDataLabels ? 'value' : 'none')) !== 'none');
+    const nextMode = allShown ? 'none' : 'value';
+    const updatedCharts = dynamicCharts.map(c => ({
+      ...c,
+      dataLabelMode: nextMode as any,
+      showDataLabels: nextMode !== 'none'
+    }));
     setDynamicCharts(updatedCharts);
     saveDynamicChartsToCloud(updatedCharts);
   };
@@ -1010,26 +1024,26 @@ export default function App() {
         <div className="p-6 space-y-6 flex-1 overflow-y-auto" id="dashboard-main-content">
           
           {/* ACTIVE FILTER INDICATOR BANNER */}
-          {(selectedBulan !== 'Semua' || selectedKepwil !== 'Semua' || selectedKantorCabang !== 'Semua') && (
+          {(parseFilterValueList(selectedBulan).length > 0 || parseFilterValueList(selectedKepwil).length > 0 || parseFilterValueList(selectedKantorCabang).length > 0) && (
             <div className="bg-indigo-50/90 border border-indigo-200 rounded-2xl p-3 px-4 flex flex-wrap items-center justify-between gap-3 text-xs animate-fadeIn shadow-3xs">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-extrabold text-indigo-950 flex items-center gap-1.5">
                   <Filter className="w-4 h-4 text-indigo-600 shrink-0" />
                   Filter Data Aktif:
                 </span>
-                {selectedBulan !== 'Semua' && (
+                {parseFilterValueList(selectedBulan).length > 0 && (
                   <span className="bg-white text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 shadow-3xs flex items-center gap-1">
-                    📅 Bulan: <strong>{selectedBulan}</strong>
+                    📅 Bulan: <strong>{parseFilterValueList(selectedBulan).join(', ')}</strong>
                   </span>
                 )}
-                {selectedKepwil !== 'Semua' && (
+                {parseFilterValueList(selectedKepwil).length > 0 && (
                   <span className="bg-white text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 shadow-3xs flex items-center gap-1">
-                    🏛️ KEPWIL: <strong>{selectedKepwil}</strong>
+                    🏛️ KEPWIL: <strong>{parseFilterValueList(selectedKepwil).join(', ')}</strong>
                   </span>
                 )}
-                {selectedKantorCabang !== 'Semua' && (
+                {parseFilterValueList(selectedKantorCabang).length > 0 && (
                   <span className="bg-white text-blue-800 font-bold px-2.5 py-1 rounded-lg border border-blue-200 shadow-3xs flex items-center gap-1">
-                    🏢 KC: <strong>{selectedKantorCabang}</strong>
+                    🏢 KC: <strong>{parseFilterValueList(selectedKantorCabang).join(', ')}</strong>
                   </span>
                 )}
                 <span className="text-slate-500 font-medium ml-1">
@@ -1071,13 +1085,13 @@ export default function App() {
                       {/* Active filter summary chips when collapsed or expanded */}
                       <div className="hidden sm:flex items-center gap-1.5 overflow-x-auto text-[10px]">
                         <span className="bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md font-semibold text-indigo-800">
-                          Bulan: <strong>{selectedBulan}</strong>
+                          Bulan: <strong>{parseFilterValueList(selectedBulan).length > 0 ? parseFilterValueList(selectedBulan).join(', ') : 'Semua'}</strong>
                         </span>
                         <span className="bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-semibold text-emerald-800 truncate max-w-[130px]">
-                          KEPWIL: <strong>{selectedKepwil}</strong>
+                          KEPWIL: <strong>{parseFilterValueList(selectedKepwil).length > 0 ? parseFilterValueList(selectedKepwil).join(', ') : 'Semua'}</strong>
                         </span>
                         <span className="bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md font-semibold text-blue-800 truncate max-w-[150px]">
-                          KC: <strong>{selectedKantorCabang}</strong>
+                          KC: <strong>{parseFilterValueList(selectedKantorCabang).length > 0 ? parseFilterValueList(selectedKantorCabang).join(', ') : 'Semua'}</strong>
                         </span>
                       </div>
                     </div>
@@ -1088,7 +1102,7 @@ export default function App() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  {(selectedBulan !== 'Semua' || selectedKepwil !== 'Semua' || selectedKantorCabang !== 'Semua') && (
+                  {(parseFilterValueList(selectedBulan).length > 0 || parseFilterValueList(selectedKepwil).length > 0 || parseFilterValueList(selectedKantorCabang).length > 0) && (
                     <button
                       type="button"
                       onClick={() => {
@@ -1307,6 +1321,20 @@ export default function App() {
                   </div>
 
                   <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+                    <button
+                      onClick={handleToggleAllDataLabels}
+                      className={`font-bold py-2 px-3.5 rounded-xl text-xs transition-colors shadow-2xs shrink-0 flex items-center gap-1.5 cursor-pointer border ${
+                        dynamicCharts.length > 0 && dynamicCharts.every(c => c.showDataLabels)
+                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
+                          : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                      }`}
+                      id="toggle-all-chart-labels-button"
+                      title="Tampilkan atau sembunyikan nilai angka data pada semua grafik"
+                    >
+                      <Hash className={`h-4 w-4 ${dynamicCharts.length > 0 && dynamicCharts.every(c => c.showDataLabels) ? 'text-white' : 'text-indigo-600'}`} />
+                      <span>{dynamicCharts.length > 0 && dynamicCharts.every(c => c.showDataLabels) ? 'Angka: Semua On' : 'Tampilkan Angka Grafik'}</span>
+                    </button>
+
                     {isAdmin ? (
                       <button
                         onClick={() => handleExecuteSync()}

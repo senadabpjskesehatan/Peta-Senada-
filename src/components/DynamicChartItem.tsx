@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { ResponsiveContainer, LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import { Settings, Trash2, Database, FileSpreadsheet, RotateCw, CheckCircle, AlertCircle, BarChart2, TrendingUp, PieChart as PieIcon, Layers, Shield, Globe, Activity, Target, Award, Zap } from 'lucide-react';
-import { DynamicChart, CityData, MonthlyPerformance } from '../types';
+import { ResponsiveContainer, LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, LabelList } from 'recharts';
+import { Settings, Trash2, Database, FileSpreadsheet, RotateCw, CheckCircle, AlertCircle, BarChart2, TrendingUp, PieChart as PieIcon, Layers, Shield, Globe, Activity, Target, Award, Zap, Hash } from 'lucide-react';
+import { DynamicChart, CityData, MonthlyPerformance, DataLabelMode } from '../types';
 import { fetchSheetData, parseNumericValue } from '../utils/sheetParser';
 import { isBulanMatching, isKepwilMatching, isKantorCabangMatching } from '../utils/monthHelper';
 
@@ -16,9 +16,9 @@ interface DynamicChartItemProps {
   isSyncing?: boolean;
   isAdmin?: boolean;
   onRequestAdminLogin?: () => void;
-  selectedBulan?: string;
-  selectedKepwil?: string;
-  selectedKantorCabang?: string;
+  selectedBulan?: string | string[];
+  selectedKepwil?: string | string[];
+  selectedKantorCabang?: string | string[];
 }
 
 export default function DynamicChartItem({
@@ -220,10 +220,10 @@ export default function DynamicChartItem({
         xAxisColumns: ['name'],
         yAxisColumns: ['informasi', 'permintaan', 'pengaduan'],
         pieColumns: ['informasi', 'permintaan', 'pengaduan'],
-        yAxisColumn: undefined,
+        yAxisColumn: '',
         isSynced: true,
-        syncedData: undefined,
-        columns: undefined
+        syncedData: [],
+        columns: []
       });
     } else {
       onUpdate(chart.id, {
@@ -232,7 +232,7 @@ export default function DynamicChartItem({
         xAxisColumns: [],
         yAxisColumns: [],
         pieColumns: [],
-        yAxisColumn: undefined,
+        yAxisColumn: '',
         isSynced: false
       });
     }
@@ -248,6 +248,8 @@ export default function DynamicChartItem({
       onUpdate(chart.id, { xAxisColumn: 'layanan', yAxisColumns: ['total'] });
     }
   };
+
+  const currentLabelMode: DataLabelMode = chart.dataLabelMode || (chart.showDataLabels === false ? 'none' : chart.showDataLabels === true ? 'value' : 'none');
 
   // Render the selected Recharts visualization type
   const renderChart = () => {
@@ -339,6 +341,21 @@ export default function DynamicChartItem({
         pieChartData = Array.from(agg.entries()).map(([name, value]) => ({ name, value }));
       }
 
+      const totalPieValue = pieChartData.reduce((acc, curr) => acc + (typeof curr.value === 'number' ? curr.value : parseNumericValue(curr.value) || 0), 0);
+
+      const renderPieLabel = (entry: any) => {
+        if (currentLabelMode === 'none') return false;
+        const val = entry?.value;
+        const num = typeof val === 'number' ? val : parseNumericValue(val) || 0;
+        if (currentLabelMode === 'percent') {
+          const pct = typeof entry?.percent === 'number' 
+            ? entry.percent * 100 
+            : (totalPieValue > 0 ? (num / totalPieValue) * 100 : 0);
+          return `${pct.toFixed(1).replace(/\.0$/, '')}%`;
+        }
+        return num.toLocaleString('id-ID');
+      };
+
       return (
         <PieChart margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
           <Tooltip 
@@ -355,6 +372,7 @@ export default function DynamicChartItem({
             innerRadius={30}
             paddingAngle={2}
             fill="#8884d8"
+            label={currentLabelMode !== 'none' ? renderPieLabel : false}
           >
             {pieChartData.map((_, index) => (
               <Cell key={`cell-${index}`} fill={SERIES_COLORS[index % SERIES_COLORS.length]} />
@@ -430,6 +448,30 @@ export default function DynamicChartItem({
       return row;
     });
 
+    const formatDataLabel = (val: any, index?: any) => {
+      if (currentLabelMode === 'none') return '';
+      const num = typeof val === 'number' ? val : parseNumericValue(val) || 0;
+      if (currentLabelMode === 'percent') {
+        const row = typeof index === 'number' ? formattedData[index] : (typeof index === 'object' && index?.payload ? index.payload : null);
+        if (yKeys.length > 1 && row) {
+          let pointTotal = 0;
+          yKeys.forEach(yk => {
+            pointTotal += (typeof row[yk] === 'number' ? row[yk] : parseNumericValue(row[yk])) || 0;
+          });
+          if (pointTotal <= 0) return '0%';
+          const pct = (num / pointTotal) * 100;
+          return `${pct.toFixed(1).replace(/\.0$/, '')}%`;
+        } else {
+          const yk = yKeys[0] || '';
+          const seriesTotal = formattedData.reduce((acc, r) => acc + (typeof r[yk] === 'number' ? r[yk] : parseNumericValue(r[yk]) || 0), 0);
+          if (seriesTotal <= 0) return '0%';
+          const pct = (num / seriesTotal) * 100;
+          return `${pct.toFixed(1).replace(/\.0$/, '')}%`;
+        }
+      }
+      return num.toLocaleString('id-ID');
+    };
+
     // Custom Tooltip for dynamic keys
     const CustomDynamicTooltip = ({ active, payload }: any) => {
       if (active && payload && payload.length) {
@@ -457,7 +499,7 @@ export default function DynamicChartItem({
     switch (chart.type) {
       case 'line':
         return (
-          <LineChart data={formattedData} margin={{ top: 5, right: 10, left: -25, bottom: 5 }}>
+          <LineChart data={formattedData} margin={{ top: currentLabelMode !== 'none' ? 18 : 5, right: 10, left: -25, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
             <XAxis dataKey={effectiveXKey} stroke="#64748b" fontSize={10} tickLine={false} />
             <YAxis stroke="#64748b" fontSize={10} tickLine={false} />
@@ -471,7 +513,19 @@ export default function DynamicChartItem({
                 stroke={SERIES_COLORS[idx % SERIES_COLORS.length]} 
                 strokeWidth={2.5} 
                 activeDot={{ r: 6 }} 
-              />
+              >
+                {currentLabelMode !== 'none' && (
+                  <LabelList 
+                    dataKey={yk} 
+                    position="top" 
+                    offset={6} 
+                    fontSize={9} 
+                    fill="#334155" 
+                    fontWeight={700} 
+                    formatter={formatDataLabel as any} 
+                  />
+                )}
+              </Line>
             ))}
             {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />}
           </LineChart>
@@ -479,7 +533,7 @@ export default function DynamicChartItem({
 
       case 'bar':
         return (
-          <BarChart data={formattedData} margin={{ top: 5, right: 10, left: -25, bottom: 5 }}>
+          <BarChart data={formattedData} margin={{ top: currentLabelMode !== 'none' ? 18 : 5, right: 10, left: -25, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
             <XAxis dataKey={effectiveXKey} stroke="#64748b" fontSize={10} tickLine={false} />
             <YAxis stroke="#64748b" fontSize={10} tickLine={false} />
@@ -491,7 +545,19 @@ export default function DynamicChartItem({
                 dataKey={yk} 
                 fill={SERIES_COLORS[idx % SERIES_COLORS.length]} 
                 radius={[3, 3, 0, 0]} 
-              />
+              >
+                {currentLabelMode !== 'none' && (
+                  <LabelList 
+                    dataKey={yk} 
+                    position="top" 
+                    offset={4} 
+                    fontSize={9} 
+                    fill="#334155" 
+                    fontWeight={700} 
+                    formatter={formatDataLabel as any} 
+                  />
+                )}
+              </Bar>
             ))}
             {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />}
           </BarChart>
@@ -499,7 +565,7 @@ export default function DynamicChartItem({
 
       case 'area':
         return (
-          <AreaChart data={formattedData} margin={{ top: 5, right: 10, left: -25, bottom: 5 }}>
+          <AreaChart data={formattedData} margin={{ top: currentLabelMode !== 'none' ? 18 : 5, right: 10, left: -25, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
             <XAxis dataKey={effectiveXKey} stroke="#64748b" fontSize={10} tickLine={false} />
             <YAxis stroke="#64748b" fontSize={10} tickLine={false} />
@@ -515,7 +581,19 @@ export default function DynamicChartItem({
                   stroke={color} 
                   fill={color} 
                   fillOpacity={0.25} 
-                />
+                >
+                  {currentLabelMode !== 'none' && (
+                    <LabelList 
+                      dataKey={yk} 
+                      position="top" 
+                      offset={6} 
+                      fontSize={9} 
+                      fill="#334155" 
+                      fontWeight={700} 
+                      formatter={formatDataLabel as any} 
+                    />
+                  )}
+                </Area>
               );
             })}
             {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />}
@@ -569,34 +647,36 @@ export default function DynamicChartItem({
           )}
         </div>
 
-        {isAdmin ? (
-          <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isAdmin ? (
+            <>
+              <button
+                onClick={() => setShowConfig(!showConfig)}
+                className={`p-1.5 rounded-lg transition-all border cursor-pointer ${showConfig ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-bold' : 'hover:bg-slate-50 border-transparent text-slate-400 hover:text-slate-600'}`}
+                title="Setelan grafik (Admin)"
+                id={`chart-settings-toggle-${chart.id}`}
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => onDelete(chart.id)}
+                className="p-1.5 hover:bg-rose-50 border border-transparent rounded-lg text-slate-400 hover:text-rose-600 transition-all cursor-pointer"
+                title="Hapus grafik (Admin)"
+                id={`chart-delete-button-${chart.id}`}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </>
+          ) : (
             <button
-              onClick={() => setShowConfig(!showConfig)}
-              className={`p-1.5 rounded-lg transition-all border cursor-pointer ${showConfig ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-bold' : 'hover:bg-slate-50 border-transparent text-slate-400 hover:text-slate-600'}`}
-              title="Setelan grafik (Admin)"
-              id={`chart-settings-toggle-${chart.id}`}
+              onClick={onRequestAdminLogin}
+              className="text-[10px] text-slate-400 hover:text-slate-600 font-semibold px-2 py-1 rounded-lg hover:bg-slate-100 transition-all cursor-pointer"
+              title="Mode Tamu (View Only) - Klik untuk Login Admin"
             >
-              <Settings className="h-4 w-4" />
+              Mode Tamu (View Only)
             </button>
-            <button
-              onClick={() => onDelete(chart.id)}
-              className="p-1.5 hover:bg-rose-50 border border-transparent rounded-lg text-slate-400 hover:text-rose-600 transition-all cursor-pointer"
-              title="Hapus grafik (Admin)"
-              id={`chart-delete-button-${chart.id}`}
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={onRequestAdminLogin}
-            className="text-[10px] text-slate-400 hover:text-slate-600 font-semibold px-2 py-1 rounded-lg hover:bg-slate-100 transition-all cursor-pointer"
-            title="Mode Tamu (View Only) - Klik untuk Login Admin"
-          >
-            Mode Tamu (View Only)
-          </button>
-        )}
+          )}
+        </div>
       </div>
 
       {/* RENDER DYNAMIC CHART AREA */}
@@ -672,6 +752,46 @@ export default function DynamicChartItem({
                   {t === 'pie' ? 'lingkar' : t === 'area' ? 'wilayah' : t === 'bar' ? 'batang' : 'garis'}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Menu Keterangan Label Data Grafik */}
+          <div className="bg-white p-3 border border-slate-200 rounded-2xl shadow-2xs space-y-2">
+            <div className="flex items-center gap-2 mb-1">
+              <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600">
+                <Hash className="h-4 w-4" />
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-800 font-bold">Keterangan Label Data Grafik</label>
+                <p className="text-[10px] text-slate-400">Pilih opsi keterangan yang ditampilkan pada grafik.</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5 pt-1">
+              {[
+                { id: 'none', label: 'Tanpa Keterangan' },
+                { id: 'value', label: 'Keterangan Angka' },
+                { id: 'percent', label: 'Keterangan Persen' },
+              ].map(opt => {
+                const isSelected = currentLabelMode === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => onUpdate(chart.id, { 
+                      dataLabelMode: opt.id as DataLabelMode, 
+                      showDataLabels: opt.id !== 'none' 
+                    })}
+                    className={`py-2 px-1 rounded-xl font-bold text-[10px] sm:text-[11px] text-center transition-all border cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
+                        : 'bg-slate-50 border-slate-200 text-slate-650 hover:bg-slate-100 hover:text-slate-800'
+                    }`}
+                    id={`chart-label-mode-${opt.id}-${chart.id}`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -885,7 +1005,7 @@ export default function DynamicChartItem({
                               } else {
                                 updated = updated.filter(c => c !== col);
                               }
-                              onUpdate(chart.id, { yAxisColumns: updated, yAxisColumn: undefined });
+                              onUpdate(chart.id, { yAxisColumns: updated, yAxisColumn: '' });
                             }}
                             className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer"
                           />

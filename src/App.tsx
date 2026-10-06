@@ -32,7 +32,8 @@ import {
   Landmark,
   Building2,
   RotateCcw,
-  Hash
+  Hash,
+  Table2
 } from 'lucide-react';
 
 import { CityData, Ticket, MonthlyPerformance, DynamicChart, MapSyncConfig, FilterReference } from './types';
@@ -41,6 +42,7 @@ import { computeFilterOptions } from './utils/filterOptions';
 import { DEFAULT_CITIES, DEFAULT_TICKETS, MONTHLY_PERFORMANCE, DEFAULT_CHARTS, SAMPLE_SHEETS_CSV, findCityCoordinates, getKepwilForCity } from './data/defaultData';
 import { parseNumericValue, fetchSheetData, parseCSV } from './utils/sheetParser';
 import { isBulanMatching, isKepwilMatching, isKantorCabangMatching, parseMonthValue, parseFilterValueList } from './utils/monthHelper';
+import { extractTopikAndPokokFromRow } from './data/topikMasalahReference';
 import SuperMindSenada from './components/SuperMindSenada';
 import {
   subscribeToAppSettings,
@@ -58,11 +60,55 @@ import MonthlyAnalytics from './components/MonthlyAnalytics';
 import DynamicChartItem from './components/DynamicChartItem';
 import AdminLoginModal from './components/AdminLoginModal';
 import ReferenceManager from './components/ReferenceManager';
+import LaporanRekapTable from './components/LaporanRekapTable';
+import ReportingPivotTable from './components/ReportingPivotTable';
 import { SenadaLogo } from './components/SenadaLogo';
 
 const CITIES_STORAGE_KEY = 'indonesia_map_cities_data_v3';
 const SYNCED_DEFAULT_CITIES_KEY = 'indonesia_map_synced_default_cities';
 const CHARTS_STORAGE_KEY = 'indonesia_map_dynamic_charts_v3';
+
+function safeSaveCitiesToLocalStorage(cities: CityData[]) {
+  try {
+    // Remove duplicate legacy key to free 50% of localStorage space immediately
+    localStorage.removeItem(SYNCED_DEFAULT_CITIES_KEY);
+    const fullJson = JSON.stringify(cities);
+    if (fullJson.length <= 1500000) {
+      localStorage.setItem(CITIES_STORAGE_KEY, fullJson);
+      return;
+    }
+  } catch (e) {
+    // Quota exceeded on full payload, fall through to compact payload
+  }
+
+  try {
+    localStorage.removeItem(SYNCED_DEFAULT_CITIES_KEY);
+    localStorage.removeItem('senada_reporting_pivot_tabs_v2');
+    const compactCities = cities.map(({ rawRow, ...rest }) => rest);
+    localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(compactCities));
+  } catch (e) {
+    // Ignore storage quota error; in-memory state and Firestore hold the data
+  }
+}
+
+function safeSaveChartsToLocalStorage(charts: DynamicChart[]) {
+  try {
+    const fullJson = JSON.stringify(charts);
+    if (fullJson.length <= 800000) {
+      localStorage.setItem(CHARTS_STORAGE_KEY, fullJson);
+      return;
+    }
+  } catch (e) {
+    // Fall through to compact charts without heavy syncedData
+  }
+
+  try {
+    const compactCharts = charts.map(({ syncedData, ...rest }) => rest);
+    localStorage.setItem(CHARTS_STORAGE_KEY, JSON.stringify(compactCharts));
+  } catch (e) {
+    // Ignore storage quota error
+  }
+}
 
 export default function App() {
   // Global Unified States initialized with localStorage persistence (prioritizing synced default data from Google Sheet with verified coordinates)
@@ -143,7 +189,7 @@ export default function App() {
     };
   });
 
-  const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts' | 'sms'>('map');
+  const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts' | 'sms' | 'reporting'>('map');
   const [isGlobalFilterExpanded, setIsGlobalFilterExpanded] = useState<boolean>(true);
   const [showCopyNotification, setShowCopyNotification] = useState(false);
   const [showCopyDialog, setShowCopyDialog] = useState<string | null>(null);
@@ -202,9 +248,8 @@ export default function App() {
             };
           });
           setCitiesData(mapped);
+          safeSaveCitiesToLocalStorage(mapped);
           try {
-            localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mapped));
-            localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mapped));
             localStorage.setItem('has_synced_custom_data', 'true');
           } catch (e) {}
         }
@@ -225,9 +270,7 @@ export default function App() {
           isSynced: true
         }));
         setDynamicCharts(mapped);
-        try {
-          localStorage.setItem(CHARTS_STORAGE_KEY, JSON.stringify(mapped));
-        } catch (e) {}
+        safeSaveChartsToLocalStorage(mapped);
       }
     });
 
@@ -236,7 +279,7 @@ export default function App() {
       if (cloudSettings) {
         setIsCloudConnected(true);
         if (cloudSettings.navOrder && Array.isArray(cloudSettings.navOrder)) {
-          const filtered = cloudSettings.navOrder.filter((k: string) => k !== 'analytics' && k !== 'tickets' && k !== 'referensi');
+          const filtered = cloudSettings.navOrder.filter((k: string) => k !== 'analytics' && k !== 'tickets' && k !== 'referensi' && k !== 'laporan' && k !== 'reporting');
           if (!filtered.includes('sms')) {
             filtered.push('sms');
           }
@@ -263,20 +306,12 @@ export default function App() {
 
   // Save cities data to localStorage whenever updated
   useEffect(() => {
-    try {
-      localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(citiesData));
-    } catch (e) {
-      console.error('Failed to save cities data to storage', e);
-    }
+    safeSaveCitiesToLocalStorage(citiesData);
   }, [citiesData]);
 
   // Save dynamic charts to localStorage whenever updated
   useEffect(() => {
-    try {
-      localStorage.setItem(CHARTS_STORAGE_KEY, JSON.stringify(dynamicCharts));
-    } catch (e) {
-      console.error('Failed to save dynamic charts to storage', e);
-    }
+    safeSaveChartsToLocalStorage(dynamicCharts);
   }, [dynamicCharts]);
 
   // 3 Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang - supports multi-select checklist)
@@ -402,10 +437,9 @@ export default function App() {
   // Handler to modify/update cities from map component (Google Sheets mapping / Excel upload)
   const handleCitiesDataChange = (updatedCities: CityData[], updatedConfig?: MapSyncConfig) => {
     setCitiesData(updatedCities);
+    safeSaveCitiesToLocalStorage(updatedCities);
     try {
       localStorage.setItem('has_synced_custom_data', 'true');
-      localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(updatedCities));
-      localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(updatedCities));
     } catch (e) {}
     
     if (updatedConfig) {
@@ -475,7 +509,7 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const filtered = parsed.filter((key: string) => key !== 'analytics' && key !== 'tickets' && key !== 'referensi');
+        const filtered = parsed.filter((key: string) => key !== 'analytics' && key !== 'tickets' && key !== 'referensi' && key !== 'laporan' && key !== 'reporting');
         if (!filtered.includes('sms')) {
           filtered.push('sms');
         }
@@ -682,14 +716,21 @@ export default function App() {
           const lat = foundCoords ? foundCoords.lat : (existingCity ? existingCity.latitude : -6.2088);
           const lon = foundCoords ? foundCoords.lon : (existingCity ? existingCity.longitude : 106.8456);
 
-          const infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
-          const permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
-          const pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
+          let infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
+          let permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
+          let pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
           const slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
+
+          const topikSync = extractTopikAndPokokFromRow(row, parseNumericValue);
+          if (topikSync.hasMatchedTopik && infoVal === 0 && permVal === 0 && pengVal === 0) {
+            infoVal = topikSync.byKategori.Informasi;
+            permVal = topikSync.byKategori.Permintaan;
+            pengVal = topikSync.byKategori.Pengaduan;
+          }
 
           const totalFromCol = matchedTotal && row[matchedTotal] !== undefined ? parseNumericValue(row[matchedTotal]) : 0;
           const calculatedTotal = infoVal + permVal + pengVal;
-          const total = totalFromCol > 0 ? totalFromCol : calculatedTotal;
+          const total = calculatedTotal > 0 ? calculatedTotal : totalFromCol;
 
           const parsedBulan = parseMonthValue(rawBulan);
           const normalizedBulan = parsedBulan ? parsedBulan.label : rawBulan;
@@ -708,15 +749,20 @@ export default function App() {
             total,
             avgSlaDays: 2.4,
             slaCompliance: Math.min(100, Math.max(0, slaVal)),
-            rawRow: row
+            rawRow: row,
+            ...(topikSync.hasMatchedTopik ? {
+              pokokMasalahBreakdown: topikSync.byKategoriAndPokok,
+              topikBreakdown: topikSync.topikCounts,
+            } : {}),
           };
         }).filter(Boolean) as CityData[];
 
         if (mappedCities.length > 0) {
           setCitiesData(mappedCities);
-          localStorage.setItem(SYNCED_DEFAULT_CITIES_KEY, JSON.stringify(mappedCities));
-          localStorage.setItem(CITIES_STORAGE_KEY, JSON.stringify(mappedCities));
-          localStorage.setItem('has_synced_custom_data', 'true');
+          safeSaveCitiesToLocalStorage(mappedCities);
+          try {
+            localStorage.setItem('has_synced_custom_data', 'true');
+          } catch (e) {}
           const updatedCfg: MapSyncConfig = {
             ...mapSyncConfig,
             sheetUrl: targetUrl,
@@ -731,7 +777,9 @@ export default function App() {
             lastSyncedAt: new Date().toLocaleTimeString('id-ID')
           };
           setMapSyncConfig(updatedCfg);
-          localStorage.setItem('map_sync_config', JSON.stringify(updatedCfg));
+          try {
+            localStorage.setItem('map_sync_config', JSON.stringify(updatedCfg));
+          } catch (e) {}
           saveMapDataToCloud(mappedCities, updatedCfg, true);
         }
       }
@@ -755,7 +803,9 @@ export default function App() {
 
       const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB';
       setLastSyncedAt(nowStr);
-      localStorage.setItem('google_sheet_last_synced', nowStr);
+      try {
+        localStorage.setItem('google_sheet_last_synced', nowStr);
+      } catch (e) {}
       saveAppSettingsToCloud({ lastSyncedAt: nowStr });
       setSyncStatusToast(`Sukses sinkronisasi Google Sheet (${nowStr})`);
       setTimeout(() => setSyncStatusToast(null), 3500);
@@ -813,19 +863,32 @@ export default function App() {
         </div>
         
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navOrder.filter(k => k !== 'analytics' && k !== 'tickets' && k !== 'referensi').map((tabKey, idx, arr) => {
+          {navOrder.filter(k => k !== 'analytics' && k !== 'tickets' && k !== 'referensi' && k !== 'laporan' && k !== 'reporting').map((tabKey, idx, arr) => {
             const isMap = tabKey === 'map';
             const isRef = tabKey === 'referensi';
             const isSms = tabKey === 'sms';
+            const isReporting = tabKey === 'reporting';
             const isActive = activeMainTab === tabKey;
-            const label = isMap ? 'PETA NASIONAL' : isRef ? 'Referensi Filter' : isSms ? 'SMS (Super Mind Senada)' : 'OVERVIEW';
+            const label = isMap 
+              ? 'PETA NASIONAL' 
+              : isRef 
+              ? 'Referensi Filter' 
+              : isSms 
+              ? 'SMS (Super Mind Senada)' 
+              : isReporting
+              ? 'REPORTING'
+              : 'OVERVIEW';
 
             return (
               <div
                 key={tabKey}
                 className={`group relative w-full p-2.5 rounded-lg flex items-center justify-between transition-colors ${
                   isActive 
-                    ? isSms ? 'bg-indigo-600/30 text-indigo-300 font-medium border border-indigo-500/40' : 'bg-blue-600/20 text-blue-400 font-medium'
+                    ? isSms 
+                      ? 'bg-indigo-600/30 text-indigo-300 font-medium border border-indigo-500/40' 
+                      : isReporting
+                      ? 'bg-emerald-600/25 text-emerald-300 font-medium border border-emerald-500/40'
+                      : 'bg-blue-600/20 text-blue-400 font-medium'
                     : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
                 id={`tab-${tabKey}-button`}
@@ -836,6 +899,8 @@ export default function App() {
                 >
                   {isSms ? (
                     <Sparkles className={`w-4 h-4 shrink-0 ${isActive ? 'text-indigo-400' : 'text-slate-500'}`} />
+                  ) : isReporting ? (
+                    <Table2 className={`w-4 h-4 shrink-0 ${isActive ? 'text-emerald-400' : 'text-slate-500'}`} />
                   ) : (
                     <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
                   )}
@@ -936,6 +1001,7 @@ export default function App() {
                activeMainTab === 'tickets' ? 'Antrean Laporan & SLA Tindaklanjut' :
                activeMainTab === 'analytics' ? 'Analitik Performa Layanan Bulanan' :
                activeMainTab === 'sms' ? 'SMS (Super Mind Senada) - Rekomendasi Strategis AI' :
+               activeMainTab === 'reporting' ? 'REPORTING - PIVOT TABLE EXCEL' :
                'Visualisasi Grafik Kustom Dinamis'}
             </h2>
             <span className="hidden sm:inline-block text-slate-300">|</span>
@@ -949,7 +1015,7 @@ export default function App() {
               </span>
             )}
 
-            <div className="bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-emerald-200 flex items-center shrink-0 shadow-3xs" title="Cloud Database Firestore terhubung secara live. Data & setting admin tersimpan dan tersinkronisasi di semua perangkat, jaringan & mode tamu.">
+            <div className="hidden bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-emerald-200 items-center shrink-0 shadow-3xs" title="Cloud Database Firestore terhubung secara live. Data & setting admin tersimpan dan tersinkronisasi di semua perangkat, jaringan & mode tamu.">
               <Database className="w-3.5 h-3.5 text-emerald-600 mr-1.5 shrink-0" />
               <span className="flex items-center gap-1.5">
                 <span>Cloud Firestore</span>
@@ -964,7 +1030,7 @@ export default function App() {
                 setShowCopyNotification(true);
                 setTimeout(() => setShowCopyNotification(false), 2500);
               }}
-              className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-3xs active:scale-95"
+              className="hidden bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 px-3 py-1.5 rounded-xl text-xs font-bold transition-all items-center gap-1.5 cursor-pointer shadow-3xs active:scale-95"
               id="share-dashboard-link-btn"
               title="Salin Link Dashboard dengan Data Ter-upload"
             >
@@ -1024,7 +1090,7 @@ export default function App() {
         <div className="p-6 space-y-6 flex-1 overflow-y-auto" id="dashboard-main-content">
           
           {/* ACTIVE FILTER INDICATOR BANNER */}
-          {(parseFilterValueList(selectedBulan).length > 0 || parseFilterValueList(selectedKepwil).length > 0 || parseFilterValueList(selectedKantorCabang).length > 0) && (
+          {activeMainTab !== 'reporting' && (parseFilterValueList(selectedBulan).length > 0 || parseFilterValueList(selectedKepwil).length > 0 || parseFilterValueList(selectedKantorCabang).length > 0) && (
             <div className="bg-indigo-50/90 border border-indigo-200 rounded-2xl p-3 px-4 flex flex-wrap items-center justify-between gap-3 text-xs animate-fadeIn shadow-3xs">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-extrabold text-indigo-950 flex items-center gap-1.5">
@@ -1066,7 +1132,7 @@ export default function App() {
           )}
 
           {/* GLOBAL FILTER BAR FOR OTHER PAGES (ANALYTICS, TICKETS, CUSTOM CHARTS) */}
-          {activeMainTab !== 'map' && activeMainTab !== 'referensi' && (
+          {activeMainTab !== 'map' && activeMainTab !== 'referensi' && activeMainTab !== 'reporting' && (
             <div className="bg-white border border-slate-200 rounded-2xl p-3.5 sm:p-4 shadow-xs space-y-3 animate-fadeIn transition-all">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5 min-w-0">
@@ -1175,65 +1241,67 @@ export default function App() {
           )}
 
           {/* 4-COLUMN SUMMARY METRIC GRID ACCORDING TO EXCEL DATA */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
-            
-            {/* 1. TOTAL TIKET */}
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
-              <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-                <FileSpreadsheet className="h-6 w-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Total Tiket</span>
-                <div className="flex items-baseline justify-between mt-0.5">
-                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalTiket.toLocaleString('id-ID')}</h4>
-                  <span className="text-blue-700 text-sm font-extrabold bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 shadow-3xs">100%</span>
+          {activeMainTab !== 'reporting' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
+              
+              {/* 1. TOTAL TIKET */}
+              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
+                <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+                  <FileSpreadsheet className="h-6 w-6" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Total Tiket</span>
+                  <div className="flex items-baseline justify-between mt-0.5">
+                    <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalTiket.toLocaleString('id-ID')}</h4>
+                    <span className="text-blue-700 text-sm font-extrabold bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 shadow-3xs">100%</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* 2. LAYANAN INFORMASI */}
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
-              <div className="p-3 bg-sky-50 text-sky-600 rounded-xl">
-                <HelpCircle className="h-6 w-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Informasi</span>
-                <div className="flex items-baseline justify-between mt-0.5">
-                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalInformasi.toLocaleString('id-ID')}</h4>
-                  <span className="text-sky-700 text-sm font-extrabold bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200 shadow-3xs">{summaryMetrics.pctInformasi}%</span>
+              {/* 2. LAYANAN INFORMASI */}
+              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
+                <div className="p-3 bg-sky-50 text-sky-600 rounded-xl">
+                  <HelpCircle className="h-6 w-6" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Informasi</span>
+                  <div className="flex items-baseline justify-between mt-0.5">
+                    <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalInformasi.toLocaleString('id-ID')}</h4>
+                    <span className="text-sky-700 text-sm font-extrabold bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200 shadow-3xs">{summaryMetrics.pctInformasi}%</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* 3. LAYANAN PERMINTAAN */}
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
-              <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
-                <FileText className="h-6 w-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Permintaan</span>
-                <div className="flex items-baseline justify-between mt-0.5">
-                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPermintaan.toLocaleString('id-ID')}</h4>
-                  <span className="text-amber-700 text-sm font-extrabold bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 shadow-3xs">{summaryMetrics.pctPermintaan}%</span>
+              {/* 3. LAYANAN PERMINTAAN */}
+              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
+                <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
+                  <FileText className="h-6 w-6" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Permintaan</span>
+                  <div className="flex items-baseline justify-between mt-0.5">
+                    <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPermintaan.toLocaleString('id-ID')}</h4>
+                    <span className="text-amber-700 text-sm font-extrabold bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 shadow-3xs">{summaryMetrics.pctPermintaan}%</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* 4. LAYANAN PENGADUAN */}
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
-              <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
-                <AlertCircle className="h-6 w-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Pengaduan</span>
-                <div className="flex items-baseline justify-between mt-0.5">
-                  <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPengaduan.toLocaleString('id-ID')}</h4>
-                  <span className="text-rose-700 text-sm font-extrabold bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 shadow-3xs">{summaryMetrics.pctPengaduan}%</span>
+              {/* 4. LAYANAN PENGADUAN */}
+              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
+                <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
+                  <AlertCircle className="h-6 w-6" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Pengaduan</span>
+                  <div className="flex items-baseline justify-between mt-0.5">
+                    <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPengaduan.toLocaleString('id-ID')}</h4>
+                    <span className="text-rose-700 text-sm font-extrabold bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 shadow-3xs">{summaryMetrics.pctPengaduan}%</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-          </div>
+            </div>
+          )}
 
           {/* DYNAMIC COMPONENT LOADER BASED ON ACTIVE TAB */}
           <div>
@@ -1427,6 +1495,46 @@ export default function App() {
                 availableKepwilList={availableKepwilList}
                 availableKantorCabangList={availableKantorCabangList}
                 groupedKantorCabang={groupedKantorCabang}
+              />
+            )}
+
+            {/* VIEW 6: REPORTING DENGAN FITUR PIVOT TABLE EXCEL */}
+            {activeMainTab === 'reporting' && (
+              <ReportingPivotTable
+                citiesData={citiesData}
+                filteredCities={filteredCitiesForMetrics}
+                selectedBulan={selectedBulan}
+                selectedKepwil={selectedKepwil}
+                selectedKantorCabang={selectedKantorCabang}
+                availableBulanList={availableBulanList}
+                availableKepwilList={availableKepwilList}
+                availableKantorCabangList={availableKantorCabangList}
+                mapSyncConfig={mapSyncConfig}
+              />
+            )}
+
+            {/* VIEW 7: LAPORAN REKAPITULASI DATA TABEL (LEGACY) */}
+            {(activeMainTab as string) === 'laporan' && (
+              <LaporanRekapTable
+                citiesData={citiesData}
+                filteredCities={filteredCitiesForMetrics}
+                onCitiesDataChange={handleCitiesDataChange}
+                mapSyncConfig={mapSyncConfig}
+                googleSheetUrl={googleSheetUrl}
+                lastSyncedAt={lastSyncedAt}
+                onExecuteSync={handleExecuteSync}
+                isRefreshing={isRefreshing}
+                isAdmin={isAdmin}
+                onRequestAdminLogin={() => setIsLoginModalOpen(true)}
+                selectedBulan={selectedBulan}
+                selectedKepwil={selectedKepwil}
+                selectedKantorCabang={selectedKantorCabang}
+                onSelectedBulanChange={setSelectedBulan}
+                onSelectedKepwilChange={setSelectedKepwil}
+                onSelectedKantorCabangChange={setSelectedKantorCabang}
+                availableBulanList={availableBulanList}
+                availableKepwilList={availableKepwilList}
+                availableKantorCabangList={availableKantorCabangList}
               />
             )}
           </div>

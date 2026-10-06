@@ -72,18 +72,63 @@ export function parseNumericValue(val: any): number {
   return isNegative ? -parsed : parsed;
 }
 
-export function extractSpreadsheetId(url: string): { spreadsheetId: string | null; gid: string | null } {
-  if (!url) return { spreadsheetId: null, gid: null };
+export interface ParsedSpreadsheetUrl {
+  spreadsheetId: string | null;
+  gid: string | null;
+  isPublished: boolean;
+  pubId: string | null;
+  isDirectCsv: boolean;
+}
+
+export function extractSpreadsheetId(url: string): ParsedSpreadsheetUrl {
+  if (!url) return { spreadsheetId: null, gid: null, isPublished: false, pubId: null, isDirectCsv: false };
   
-  // Extract spreadsheet ID
-  const idMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  const spreadsheetId = idMatch ? idMatch[1] : null;
-  
-  // Extract GID (sheet tab id)
-  const gidMatch = url.match(/[#&]gid=([0-9]+)/);
+  const trimmed = url.trim();
+
+  // Check if it's already a direct CSV URL
+  const isDirectCsv = /\.csv($|\?)/i.test(trimmed) || /output=csv|format=csv/i.test(trimmed);
+
+  // Extract GID (sheet tab id) from query or hash
+  const gidMatch = trimmed.match(/[#&?]gid=([0-9]+)/);
   const gid = gidMatch ? gidMatch[1] : null;
-  
-  return { spreadsheetId, gid };
+
+  // Check for Published to Web Google Sheet: /spreadsheets/d/e/2PACX-... or /spreadsheets/u/X/d/e/2PACX-...
+  const pubMatch = trimmed.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/e\/([a-zA-Z0-9-_]+)/);
+  if (pubMatch) {
+    return {
+      spreadsheetId: pubMatch[1],
+      gid,
+      isPublished: true,
+      pubId: pubMatch[1],
+      isDirectCsv
+    };
+  }
+
+  // Check for Standard Google Sheet: /spreadsheets/d/1BxiM... or /spreadsheets/u/X/d/1BxiM...
+  const idMatch = trimmed.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9-_]+)/);
+  if (idMatch && idMatch[1] !== 'e') {
+    return {
+      spreadsheetId: idMatch[1],
+      gid,
+      isPublished: false,
+      pubId: null,
+      isDirectCsv
+    };
+  }
+
+  // Check for Drive file view link: /file/d/1BxiM...
+  const fileMatch = trimmed.match(/\/file\/d\/([a-zA-Z0-9-_]+)/);
+  if (fileMatch) {
+    return {
+      spreadsheetId: fileMatch[1],
+      gid,
+      isPublished: false,
+      pubId: null,
+      isDirectCsv
+    };
+  }
+
+  return { spreadsheetId: null, gid, isPublished: false, pubId: null, isDirectCsv };
 }
 
 export function parseCSVLine(line: string): string[] {
@@ -272,63 +317,200 @@ export function parseCSV(csvText: string): any[] {
   return result;
 }
 
-export async function fetchSheetData(url: string, gid?: string): Promise<{ data: any[]; columns: string[] }> {
-  const { spreadsheetId, gid: urlGid } = extractSpreadsheetId(url);
+/**
+ * Helper to parse Google Visualization JSON response (google.visualization.Query.setResponse)
+ */
+export function parseGvizJson(rawJsonText: string): any[] {
+  if (!rawJsonText) return [];
   
-  if (!spreadsheetId) {
-    throw new Error('Link Google Sheet tidak valid. Pastikan format link benar (mengandung /spreadsheets/d/ID)');
-  }
-  
-  const activeGid = gid !== undefined && gid !== "" ? gid : (urlGid || "0");
-  
-  let csvText = "";
+  let jsonStr = rawJsonText.trim();
+  // Remove wrapping: /*O_o*/\ngoogle.visualization.Query.setResponse(...) or setResponse(...)
+  const startIdx = jsonStr.indexOf('{');
+  const endIdx = jsonStr.lastIndexOf('}');
+  if (startIdx === -1 || endIdx === -1) return [];
 
-  // Strategy 1: Call backend proxy API which handles fallback gviz & export endpoints
+  jsonStr = jsonStr.substring(startIdx, endIdx + 1);
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (!parsed || !parsed.table || !parsed.table.cols || !parsed.table.rows) {
+      return [];
+    }
+
+    const cols: string[] = parsed.table.cols.map((c: any, i: number) => {
+      if (c && c.label && String(c.label).trim()) return String(c.label).trim();
+      if (c && c.id && String(c.id).trim()) return String(c.id).trim();
+      return `Kolom_${i + 1}`;
+    });
+
+    const rows: any[] = [];
+    for (const r of parsed.table.rows) {
+      if (!r || !r.c) continue;
+      const obj: any = {};
+      let hasData = false;
+
+      r.c.forEach((cell: any, colIdx: number) => {
+        const colName = cols[colIdx] || `Kolom_${colIdx + 1}`;
+        if (cell && cell.v !== null && cell.v !== undefined) {
+          hasData = true;
+          obj[colName] = cell.v;
+        } else if (cell && cell.f !== null && cell.f !== undefined) {
+          hasData = true;
+          obj[colName] = cell.f;
+        } else {
+          obj[colName] = '';
+        }
+      });
+
+      if (hasData) {
+        rows.push(obj);
+      }
+    }
+
+    return rows;
+  } catch (e) {
+    console.warn('Failed parsing Gviz JSON:', e);
+    return [];
+  }
+}
+
+export async function fetchSheetData(url: string, gid?: string): Promise<{ data: any[]; columns: string[] }> {
+  if (!url || !url.trim()) {
+    throw new Error('Link Google Sheet kosong. Silakan masukkan link spreadsheet.');
+  }
+
+  const parsedUrl = extractSpreadsheetId(url);
+  const activeGid = gid !== undefined && gid !== "" ? gid : (parsedUrl.gid || "0");
+  
+  // If it's a direct CSV URL
+  if (parsedUrl.isDirectCsv && !parsedUrl.spreadsheetId) {
+    try {
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const csv = await resp.text();
+        if (csv && !csv.includes('<!DOCTYPE html>') && !csv.includes('<html')) {
+          const data = parseCSV(csv);
+          if (data.length > 0) {
+            return { data, columns: Object.keys(data[0]) };
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Direct CSV fetch failed, continuing with proxy...', e);
+    }
+  }
+
+  let csvText = "";
+  let rawJsonText = "";
+
+  // Strategy 1: Call backend proxy API which handles fallback gviz, pub, & export endpoints
   try {
     const proxyUrl = `/api/fetch-sheet-csv?url=${encodeURIComponent(url)}&gid=${encodeURIComponent(activeGid)}`;
     const response = await fetch(proxyUrl);
     if (response.ok) {
-      csvText = await response.text();
+      const text = await response.text();
+      if (text && !text.includes('<!DOCTYPE html>') && !text.includes('<html')) {
+        if (text.includes('google.visualization.Query.setResponse') || (text.startsWith('{') && text.includes('"table"'))) {
+          rawJsonText = text;
+        } else {
+          csvText = text;
+        }
+      }
     }
   } catch (e) {
     console.warn('Proxy fetch failed, attempting client direct fetch...', e);
   }
 
-  // Strategy 2: Direct client fetch via Google gviz/tq endpoint if proxy failed
-  if (!csvText) {
-    const directGvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&gid=${activeGid}`;
-    try {
-      const response = await fetch(directGvizUrl);
-      if (response.ok) {
-        csvText = await response.text();
+  // Strategy 2: Direct client fetch via published endpoints if published sheet
+  if (!csvText && !rawJsonText && parsedUrl.isPublished && parsedUrl.pubId) {
+    const pubUrls = [
+      `https://docs.google.com/spreadsheets/d/e/${parsedUrl.pubId}/pub?gid=${activeGid}&single=true&output=csv`,
+      `https://docs.google.com/spreadsheets/d/e/${parsedUrl.pubId}/pub?output=csv&gid=${activeGid}`,
+      `https://docs.google.com/spreadsheets/d/e/${parsedUrl.pubId}/pub?output=csv`
+    ];
+
+    for (const pUrl of pubUrls) {
+      try {
+        const response = await fetch(pUrl);
+        if (response.ok) {
+          const text = await response.text();
+          if (text && !text.includes('<!DOCTYPE html>') && !text.includes('<html')) {
+            csvText = text;
+            break;
+          }
+        }
+      } catch (e) {
+        // continue to next
       }
-    } catch (e) {
-      console.warn('Direct gviz fetch failed:', e);
     }
   }
 
-  // Strategy 3: Direct export?format=csv
-  if (!csvText) {
-    const directExportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${activeGid}`;
+  // Strategy 3: Direct client fetch via Google export endpoint
+  if (!csvText && !rawJsonText && parsedUrl.spreadsheetId) {
+    const directExportUrl = `https://docs.google.com/spreadsheets/d/${parsedUrl.spreadsheetId}/export?format=csv&gid=${activeGid}`;
     try {
       const response = await fetch(directExportUrl);
       if (response.ok) {
-        csvText = await response.text();
+        const text = await response.text();
+        if (text && !text.includes('<!DOCTYPE html>') && !text.includes('<html')) {
+          csvText = text;
+        }
       }
     } catch (e) {
       console.warn('Direct export fetch failed:', e);
     }
   }
 
-  if (!csvText || csvText.includes("<!DOCTYPE html>") || csvText.includes("<html")) {
-    throw new Error("Gagal memuat data dari Google Sheet. Pastikan spreadsheet telah diatur ke 'Siapa saja yang memiliki link dapat melihat' (Anyone with link can view).");
+  // Strategy 4: Direct client fetch via Google gviz/tq CSV endpoint
+  if (!csvText && !rawJsonText && parsedUrl.spreadsheetId) {
+    const directGvizUrl = `https://docs.google.com/spreadsheets/d/${parsedUrl.spreadsheetId}/gviz/tq?tqx=out:csv&tq=select%20*&gid=${activeGid}`;
+    try {
+      const response = await fetch(directGvizUrl);
+      if (response.ok) {
+        const text = await response.text();
+        if (text && !text.includes('<!DOCTYPE html>') && !text.includes('<html')) {
+          csvText = text;
+        }
+      }
+    } catch (e) {
+      console.warn('Direct gviz CSV fetch failed:', e);
+    }
   }
 
-  const data = parseCSV(csvText);
-  if (data.length === 0) {
-    throw new Error('Tidak ada baris data yang ditemukan di sheet ini.');
+  // Strategy 5: Direct client fetch via Google gviz/tq JSON endpoint
+  if (!csvText && !rawJsonText && parsedUrl.spreadsheetId) {
+    const directGvizJsonUrl = `https://docs.google.com/spreadsheets/d/${parsedUrl.spreadsheetId}/gviz/tq?tqx=out:json&gid=${activeGid}`;
+    try {
+      const response = await fetch(directGvizJsonUrl);
+      if (response.ok) {
+        const text = await response.text();
+        if (text && text.includes('google.visualization.Query.setResponse')) {
+          rawJsonText = text;
+        }
+      }
+    } catch (e) {
+      console.warn('Direct gviz JSON fetch failed:', e);
+    }
   }
-  
-  const columns = Object.keys(data[0]);
-  return { data, columns };
+
+  // Parse Gviz JSON if available
+  if (rawJsonText) {
+    const parsedData = parseGvizJson(rawJsonText);
+    if (parsedData.length > 0) {
+      return { data: parsedData, columns: Object.keys(parsedData[0]) };
+    }
+  }
+
+  // Parse CSV if available
+  if (csvText && !csvText.includes('<!DOCTYPE html>') && !csvText.includes('<html')) {
+    const data = parseCSV(csvText);
+    if (data.length > 0) {
+      return { data, columns: Object.keys(data[0]) };
+    }
+  }
+
+  // If both failed, provide informative error
+  throw new Error(
+    "Gagal memuat data dari Google Sheet. Pastikan spreadsheet telah diatur ke 'Siapa saja yang memiliki link dapat melihat' (General Access: Anyone with the link can view) pada menu Bagikan (Share) di Google Sheet."
+  );
 }

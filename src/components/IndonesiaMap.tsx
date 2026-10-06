@@ -1,5 +1,5 @@
 import React, { useState, useMemo, ChangeEvent, useEffect, useRef } from 'react';
-import { MapPin, RotateCw, Database, FileSpreadsheet, AlertCircle, CheckCircle, CheckCircle2, HelpCircle, X, Info, ArrowUpRight, Award, UploadCloud, Globe, FileUp, SlidersHorizontal, Layers, Table, Settings2, Save, Compass, Maximize2, Minimize2, Map as MapIcon, Eye, Search, Trophy, TrendingDown, Calendar, Landmark, Building2, Filter, RotateCcw, Sparkles, ChevronUp, ChevronDown } from 'lucide-react';
+import { MapPin, RotateCw, Database, FileSpreadsheet, AlertCircle, CheckCircle, CheckCircle2, HelpCircle, X, Info, ArrowUpRight, Award, UploadCloud, Globe, FileUp, SlidersHorizontal, Layers, Table, Settings2, Save, Compass, Maximize2, Minimize2, Map as MapIcon, Eye, Search, Trophy, TrendingDown, Calendar, Landmark, Building2, Filter, RotateCcw, Sparkles, ChevronUp, ChevronDown, Columns2, Rows, PanelRight } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -10,6 +10,8 @@ import { DEFAULT_CITIES, SAMPLE_SHEETS_CSV } from '../data/defaultData';
 import { INDONESIAN_CITIES_COORDINATES, findCityCoordinates, getIslandForCity, getKepwilForCity } from '../data/defaultData';
 import SearchableFilterSelect, { SearchableOptionGroup } from './SearchableFilterSelect';
 import { saveMapDataToCloud, saveAppSettingsToCloud } from '../lib/firebase';
+import { extractTopikAndPokokFromRow } from '../data/topikMasalahReference';
+import TopikMasalahBreakdownSection from './TopikMasalahBreakdownSection';
 
 interface IndonesiaMapProps {
   onCitiesDataChange: (cities: CityData[], updatedConfig?: MapSyncConfig) => void;
@@ -136,8 +138,8 @@ export default function IndonesiaMap({
   // Dynamic filter states based on Reference Manager
   const [dynamicFilterStates, setDynamicFilterStates] = useState<Record<string, string>>({});
 
-  // Default selected city is Jakarta (first entry in default cities)
-  const [selectedCityId, setSelectedCityId] = useState<string | null>('1');
+  // Default selected city is null (detail component hidden until map place selected or KEPWIL/KC filter changed)
+  const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
 
   // Island filter state
   const [selectedIsland, setSelectedIsland] = useState<string>('Semua');
@@ -500,6 +502,7 @@ export default function IndonesiaMap({
       slaSum: number;
       count: number;
       rawRow?: any;
+      topikBreakdown: Record<string, number>;
     }> = {};
 
     currentCities.forEach(c => {
@@ -548,9 +551,23 @@ export default function IndonesiaMap({
           slaSum: 0,
           count: 0,
           rawRow: { ...(c.rawRow || {}) },
+          topikBreakdown: {},
         };
       } else if (c.rawRow) {
         map[cleanKey].rawRow = { ...map[cleanKey].rawRow, ...c.rawRow };
+      }
+
+      if (c.topikBreakdown) {
+        for (const [tk, tv] of Object.entries(c.topikBreakdown)) {
+          map[cleanKey].topikBreakdown[tk] = (map[cleanKey].topikBreakdown[tk] || 0) + parseNumericValue(tv);
+        }
+      } else if (c.rawRow) {
+        const extracted = extractTopikAndPokokFromRow(c.rawRow, parseNumericValue);
+        if (extracted.hasMatchedTopik) {
+          for (const [tk, tv] of Object.entries(extracted.topikCounts)) {
+            map[cleanKey].topikBreakdown[tk] = (map[cleanKey].topikBreakdown[tk] || 0) + tv;
+          }
+        }
       }
 
       // Rumus SUM per kategori layanan
@@ -583,6 +600,7 @@ export default function IndonesiaMap({
         avgSlaDays: 2.4,
         slaCompliance,
         rawRow: item.rawRow,
+        ...(Object.keys(item.topikBreakdown).length > 0 ? { topikBreakdown: item.topikBreakdown } : {}),
       };
     });
   }, [currentCities, selectedBulan, selectedKepwil, selectedKantorCabang, syncConfig]);
@@ -691,16 +709,59 @@ export default function IndonesiaMap({
     return { x, y };
   };
 
+  const isKepwilFilterActive = parseFilterValueList(selectedKepwil).length > 0;
+  const isKCFilterActive = parseFilterValueList(selectedKantorCabang).length > 0;
+  const shouldShowDetailReport = Boolean(selectedCityId) || isKepwilFilterActive || isKCFilterActive;
+
   const selectedCity = useMemo(() => {
     if (!uniqueCities || uniqueCities.length === 0) return null;
-    return uniqueCities.find(c => c.id === selectedCityId) || uniqueCities[0];
-  }, [uniqueCities, selectedCityId]);
+    if (selectedCityId) {
+      const matched = uniqueCities.find(c => c.id === selectedCityId);
+      if (matched) return matched;
+    }
+    if (isKCFilterActive || isKepwilFilterActive) {
+      if (isKCFilterActive && uniqueCities.length === 1) {
+        return uniqueCities[0];
+      }
+      const totalInfo = uniqueCities.reduce((acc, c) => acc + c.informasi, 0);
+      const totalPerm = uniqueCities.reduce((acc, c) => acc + c.permintaan, 0);
+      const totalPeng = uniqueCities.reduce((acc, c) => acc + c.pengaduan, 0);
+      const totalAll = uniqueCities.reduce((acc, c) => acc + c.total, 0);
+      const avgSla = Math.round(uniqueCities.reduce((acc, c) => acc + c.slaCompliance, 0) / uniqueCities.length);
+      const kcNames = parseFilterValueList(selectedKantorCabang);
+      const kwNames = parseFilterValueList(selectedKepwil);
+      const displayName = kcNames.length > 0 ? kcNames.join(', ') : kwNames.join(', ');
+
+      return {
+        ...uniqueCities[0],
+        id: 'aggregated_filter_selection',
+        name: displayName,
+        informasi: totalInfo,
+        permintaan: totalPerm,
+        pengaduan: totalPeng,
+        total: totalAll,
+        slaCompliance: avgSla,
+      };
+    }
+    return null;
+  }, [uniqueCities, selectedCityId, isKCFilterActive, isKepwilFilterActive, selectedKantorCabang, selectedKepwil]);
 
   // Map style mode set strictly to topografi
   const [mapStyle, setMapStyle] = useState<'voyager' | 'satellite' | 'topo' | 'osm' | 'svg'>('topo');
+
   const leafletContainerRef = useRef<HTMLDivElement | null>(null);
   const leafletMapRef = useRef<L.Map | null>(null);
   const markersGroupRef = useRef<L.LayerGroup | null>(null);
+
+  // Invalidate and adapt map container size on window resize
+  useEffect(() => {
+    const timers = [
+      setTimeout(() => leafletMapRef.current?.invalidateSize(), 100),
+      setTimeout(() => leafletMapRef.current?.invalidateSize(), 300),
+      setTimeout(() => leafletMapRef.current?.invalidateSize(), 600)
+    ];
+    return () => timers.forEach(t => clearTimeout(t));
+  }, [mapStyle]);
 
   // Initialize and update Leaflet Map instance locked to Indonesia Topography
   useEffect(() => {
@@ -897,16 +958,19 @@ export default function IndonesiaMap({
   useEffect(() => {
     if (!leafletMapRef.current || mapStyle === 'svg') return;
 
-    if (selectedKantorCabang !== 'Semua' && uniqueCities.length > 0) {
-      const found = uniqueCities.find(c => (c.kantorCabang || c.name).toLowerCase() === selectedKantorCabang.toLowerCase()) || uniqueCities[0];
+    const kcList = parseFilterValueList(selectedKantorCabang);
+    const kwList = parseFilterValueList(selectedKepwil);
+
+    if (kcList.length > 0 && uniqueCities.length > 0) {
+      const found = uniqueCities.find(c => isKantorCabangMatching(c.kantorCabang || c.name, selectedKantorCabang!)) || uniqueCities[0];
       if (found && found.latitude && found.longitude) {
-        setSelectedCityId(found.id);
         leafletMapRef.current.flyTo([found.latitude, found.longitude], 9, { duration: 1.2 });
       }
-    } else if (selectedKepwil !== 'Semua' && uniqueCities.length > 0) {
-      const validPoints = uniqueCities.filter(c => c.latitude && c.longitude);
-      if (validPoints.length > 0) {
-        const bounds = L.latLngBounds(validPoints.map(c => [c.latitude, c.longitude]));
+    } else if (kwList.length > 0 && uniqueCities.length > 0) {
+      const validPoints = uniqueCities.filter(c => c.latitude && c.longitude && isKepwilMatching(c.kepwil, selectedKepwil!));
+      const targetPoints = validPoints.length > 0 ? validPoints : uniqueCities.filter(c => c.latitude && c.longitude);
+      if (targetPoints.length > 0) {
+        const bounds = L.latLngBounds(targetPoints.map(c => [c.latitude, c.longitude]));
         leafletMapRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 8 });
       }
     }
@@ -1003,10 +1067,17 @@ export default function IndonesiaMap({
         }
       }
 
-      const infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
-      const permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
-      const pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
+      let infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
+      let permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
+      let pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
       const totalFromCol = matchedTotal && row[matchedTotal] !== undefined ? parseNumericValue(row[matchedTotal]) : 0;
+
+      const topikSync = extractTopikAndPokokFromRow(row, parseNumericValue);
+      if (topikSync.hasMatchedTopik && infoVal === 0 && permVal === 0 && pengVal === 0) {
+        infoVal = topikSync.byKategori.Informasi;
+        permVal = topikSync.byKategori.Permintaan;
+        pengVal = topikSync.byKategori.Pengaduan;
+      }
 
       if (!rawName) {
         if (infoVal > 0 || permVal > 0 || pengVal > 0 || totalFromCol > 0) {
@@ -1058,7 +1129,7 @@ export default function IndonesiaMap({
       }
       
       const calculatedTotal = infoVal + permVal + pengVal;
-      const total = totalFromCol > 0 ? totalFromCol : calculatedTotal;
+      const total = calculatedTotal > 0 ? calculatedTotal : totalFromCol;
 
       const parsedBulan = parseMonthValue(rawBulan);
       const normalizedBulan = parsedBulan ? parsedBulan.label : rawBulan;
@@ -1078,16 +1149,31 @@ export default function IndonesiaMap({
         avgSlaDays: 2.4,
         slaCompliance: slaVal,
         rawRow: row,
+        ...(topikSync.hasMatchedTopik ? {
+          pokokMasalahBreakdown: topikSync.byKategoriAndPokok,
+          topikBreakdown: topikSync.topikCounts,
+        } : {}),
       };
     }).filter(Boolean) as CityData[];
 
     if (syncedCities.length > 0) {
       onCitiesDataChange(syncedCities);
       try {
-        localStorage.setItem('indonesia_map_synced_default_cities', JSON.stringify(syncedCities));
-        localStorage.setItem('indonesia_map_cities_data_v3', JSON.stringify(syncedCities));
+        localStorage.removeItem('indonesia_map_synced_default_cities');
+        const fullJson = JSON.stringify(syncedCities);
+        if (fullJson.length <= 1500000) {
+          localStorage.setItem('indonesia_map_cities_data_v3', fullJson);
+        } else {
+          const compact = syncedCities.map(({ rawRow, ...rest }) => rest);
+          localStorage.setItem('indonesia_map_cities_data_v3', JSON.stringify(compact));
+        }
       } catch (e) {
-        console.error('Failed to save synced default cities', e);
+        try {
+          const compact = syncedCities.map(({ rawRow, ...rest }) => rest);
+          localStorage.setItem('indonesia_map_cities_data_v3', JSON.stringify(compact));
+        } catch (err) {
+          // Ignore quota error; parent state & cloud hold the data
+        }
       }
       const updatedSyncCfg = { 
         ...syncConfig, 
@@ -1104,9 +1190,7 @@ export default function IndonesiaMap({
       };
       setSyncConfig(updatedSyncCfg);
       saveMapDataToCloud(syncedCities, updatedSyncCfg);
-      if (syncedCities[0]) {
-        setSelectedCityId(syncedCities[0].id);
-      }
+      setSelectedCityId(null);
     }
 
     return syncedCities.length;
@@ -1442,12 +1526,12 @@ export default function IndonesiaMap({
   const handleResetToDefault = () => {
     const hasEverSynced = localStorage.getItem('has_synced_custom_data') === 'true' || syncConfig.isSynced;
     try {
-      const savedSynced = localStorage.getItem('indonesia_map_synced_default_cities');
+      const savedSynced = localStorage.getItem('indonesia_map_cities_data_v3') || localStorage.getItem('indonesia_map_synced_default_cities');
       if (savedSynced) {
         const parsed = JSON.parse(savedSynced);
         if (Array.isArray(parsed) && parsed.length > 0) {
           onCitiesDataChange(parsed, syncConfig);
-          if (parsed[0]) setSelectedCityId(parsed[0].id);
+          setSelectedCityId(null);
           setSuccessMsg('Data sinkronisasi Google Sheet aktif & dipulihkan.');
           setTimeout(() => setSuccessMsg(null), 2500);
           return;
@@ -1477,7 +1561,7 @@ export default function IndonesiaMap({
     saveMapDataToCloud(DEFAULT_CITIES, resetCfg, false);
     setSheetRawRows([]);
     setAvailableColumns([]);
-    setSelectedCityId('1'); // Reset to Jakarta
+    setSelectedCityId(null);
     setSuccessMsg('Reset ke data default berhasil.');
     setTimeout(() => setSuccessMsg(null), 2000);
   };
@@ -1499,6 +1583,7 @@ export default function IndonesiaMap({
     setSelectedKepwil('Semua');
     setSelectedKantorCabang('Semua');
     setDynamicFilterStates({});
+    setSelectedCityId(null);
   };
 
   return (
@@ -1528,19 +1613,19 @@ export default function IndonesiaMap({
                       Filter Aktif
                     </span>
                   )}
-                  <span className="text-[11px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-md border border-slate-200">
+                  <span className="hidden text-[11px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-md border border-slate-200">
                     {uniqueCities.length} KC Terpetakan
                   </span>
 
                   {/* Active filter summary chips */}
-                  <div className="hidden sm:flex items-center gap-1.5 overflow-x-auto text-[10px]">
-                    <span className="bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md font-semibold text-indigo-800">
+                  <div className="hidden items-center gap-1.5 overflow-x-auto text-[10px]">
+                    <span className="hidden bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md font-semibold text-indigo-800">
                       Bulan: <strong>{parseFilterValueList(selectedBulan).length > 0 ? parseFilterValueList(selectedBulan).join(', ') : 'Semua'}</strong>
                     </span>
-                    <span className="bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-semibold text-emerald-800 truncate max-w-[130px]">
+                    <span className="hidden bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-semibold text-emerald-800 truncate max-w-[130px]">
                       KEPWIL: <strong>{parseFilterValueList(selectedKepwil).length > 0 ? parseFilterValueList(selectedKepwil).join(', ') : 'Semua'}</strong>
                     </span>
-                    <span className="bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md font-semibold text-blue-800 truncate max-w-[150px]">
+                    <span className="hidden bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md font-semibold text-blue-800 truncate max-w-[150px]">
                       KC: <strong>{parseFilterValueList(selectedKantorCabang).length > 0 ? parseFilterValueList(selectedKantorCabang).join(', ') : 'Semua'}</strong>
                     </span>
                   </div>
@@ -1622,6 +1707,7 @@ export default function IndonesiaMap({
                     setSelectedKepwil(val);
                     // If user changes KEPWIL and selected KC does not belong to new KEPWIL, reset KC
                     setSelectedKantorCabang('Semua');
+                    setSelectedCityId(null);
                   }}
                   options={availableKepwilList}
                   allLabel={`Semua Wilayah (${availableKepwilList.length})`}
@@ -1635,7 +1721,10 @@ export default function IndonesiaMap({
                   label={`3. Filter Kantor Cabang (KC)`}
                   icon={<Building2 className="w-3.5 h-3.5 text-blue-600" />}
                   value={selectedKantorCabang}
-                  onChange={(val) => setSelectedKantorCabang(val)}
+                  onChange={(val) => {
+                    setSelectedKantorCabang(val);
+                    setSelectedCityId(null);
+                  }}
                   groupedOptions={groupedKantorCabang}
                   options={availableKantorCabangList}
                   allLabel={`Semua Kantor Cabang (${availableKantorCabangList.length})`}
@@ -1685,7 +1774,7 @@ export default function IndonesiaMap({
           )}
 
           {/* ACTIVE COLUMN REFERENCE INFORMATION STRIP */}
-          <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-50/90 px-3.5 py-2 rounded-xl border border-slate-200/80 text-[11px] text-slate-600">
+          <div className="hidden flex-wrap items-center justify-between gap-2.5 bg-slate-50/90 px-3.5 py-2 rounded-xl border border-slate-200/80 text-[11px] text-slate-600">
             <div className="flex items-center gap-2 flex-wrap min-w-0">
               <span className="font-extrabold text-slate-700 flex items-center gap-1 shrink-0">
                 <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-600" />
@@ -1736,8 +1825,8 @@ export default function IndonesiaMap({
         </div>
       </div>
 
-      {/* MAP VIEWPORT: Full 12-columns */}
-      <div className="col-span-12 lg:col-span-12 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between text-slate-800">
+      {/* MAP VIEWPORT: Full Width (12 columns) */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col justify-between text-slate-800 transition-all col-span-12">
         <div>
           <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
             <div>
@@ -1803,7 +1892,7 @@ export default function IndonesiaMap({
               {isAdmin ? (
                 <button
                   onClick={() => setIsModalOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                  className="hidden items-center gap-1.5 px-3 py-1.5 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
                   id="open-sync-modal-btn"
                   title="Sinkronisasi Google Spreadsheet (Admin)"
                 >
@@ -1813,7 +1902,7 @@ export default function IndonesiaMap({
               ) : (
                 <button
                   onClick={onRequestAdminLogin}
-                  className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 bg-slate-100 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-semibold transition-all shadow-2xs cursor-pointer"
+                  className="hidden items-center gap-1.5 px-3 py-1.5 border border-slate-200 bg-slate-100 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-semibold transition-all shadow-2xs cursor-pointer"
                   id="open-sync-modal-btn"
                   title="Login Admin untuk Sinkronisasi Data"
                 >
@@ -1940,7 +2029,7 @@ export default function IndonesiaMap({
           {/* INTERACTIVE MAP CONTAINER */}
           {mapStyle !== 'svg' ? (
             <div className="relative rounded-2xl overflow-hidden border border-slate-200 shadow-inner group">
-              <div ref={leafletContainerRef} className="w-full h-[400px] bg-slate-100 z-10" />
+              <div ref={leafletContainerRef} className="w-full bg-slate-100 z-10 transition-all h-[460px] sm:h-[500px] lg:h-[540px]" />
 
               {/* FLOATING LEGEND BADGE OVER MAP */}
               <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-200 shadow-md z-20 pointer-events-none flex items-center gap-2">
@@ -2151,140 +2240,213 @@ export default function IndonesiaMap({
         </div>
       </div>
 
-      {/* DETAILED SERVICE REPORT PER KC: Full 12-columns below map */}
-      <div className="col-span-12 lg:col-span-12 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between text-slate-800">
-        <div>
-          <div className="border-b border-slate-100 pb-3.5 mb-5 flex flex-wrap items-center justify-between gap-3">
+      {/* DETAILED SERVICE REPORT PER KC: Shown only when a place on map is selected or KEPWIL / KC filter is active */}
+      {shouldShowDetailReport && (
+      <div 
+        id="detail-service-report-section"
+        className="col-span-12 bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col justify-between text-slate-800 transition-all animate-fadeIn"
+      >
+        <div className="flex-1 flex flex-col justify-between">
+          <div className="border-b border-slate-100 pb-3.5 mb-4 flex flex-wrap items-center justify-between gap-3 shrink-0">
             <div>
               <span className="text-[10px] text-indigo-600 block font-black uppercase tracking-wider">Detail Informasi Wilayah</span>
               <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 mt-0.5">
                 <MapPin className="h-5 w-5 text-rose-500 shrink-0" />
-                KC {selectedCity ? selectedCity.name : 'Belum Memilih'}
+                {selectedCity
+                  ? isKepwilFilterActive && !isKCFilterActive && !selectedCityId
+                    ? `Kedeputian Wilayah ${selectedCity.name.replace(/^(kedeputian\s+wilayah|kepwil)\s*/i, '')}`
+                    : `KC ${selectedCity.name}`
+                  : 'Belum Memilih'}
               </h3>
             </div>
 
-            {selectedCity && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-500 bg-slate-100 border border-slate-200 px-3 py-1 rounded-xl">
-                  Wilayah: <strong className="text-slate-800">{getIslandForCity(selectedCity.name, selectedCity.latitude, selectedCity.longitude)}</strong>
-                </span>
-                <span className="text-xs font-extrabold text-white bg-indigo-600 px-3 py-1 rounded-xl shadow-2xs">
-                  Total {selectedCity.total} Tiket
-                </span>
-              </div>
-            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              {selectedCity && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-xl">
+                    <strong className="text-slate-800">
+                      {selectedCity.id === 'aggregated_filter_selection'
+                        ? `${uniqueCities.length} Kantor Cabang`
+                        : getIslandForCity(selectedCity.name, selectedCity.latitude, selectedCity.longitude)}
+                    </strong>
+                  </span>
+                  <span className="text-xs font-extrabold text-white bg-indigo-600 px-2.5 py-1 rounded-xl shadow-2xs">
+                    {selectedCity.total} Tiket
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
 
           {selectedCity ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5 flex-1 items-stretch my-1">
               
               {/* LAYANAN INFORMASI STAT */}
-              <div className="p-4 bg-indigo-50/60 border border-indigo-100/90 rounded-2xl flex flex-col justify-between shadow-2xs">
+              <div className="p-3.5 sm:p-4 bg-indigo-50/70 border border-indigo-100 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-indigo-50/90 transition-all">
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-extrabold text-indigo-700 flex items-center gap-1.5">
-                      <Info className="h-4 w-4" />
-                      Layanan Informasi
-                    </span>
-                    <span className="text-[10px] font-extrabold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full font-mono">
+                  <div className="flex items-center justify-between gap-3 mb-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="p-2 bg-indigo-100/90 rounded-lg text-indigo-700 shrink-0 shadow-3xs">
+                        <Info className="h-4.5 w-4.5" />
+                      </span>
+                      <div className="truncate">
+                        <span className="text-sm sm:text-base font-black text-indigo-950 block truncate">Layanan Informasi</span>
+                        <span className="text-[11px] text-indigo-600 font-semibold block truncate">Permintaan info kepesertaan</span>
+                      </div>
+                    </div>
+                    <span className="text-xs font-black bg-indigo-100 text-indigo-800 px-2.5 py-1 rounded-lg font-mono shadow-3xs shrink-0 border border-indigo-200/60">
                       {selectedCity.total > 0 ? Math.round((selectedCity.informasi / selectedCity.total) * 100) : 0}%
                     </span>
                   </div>
-                  <div className="text-2xl font-black text-slate-900 font-mono mb-2">
-                    {selectedCity.informasi} <span className="text-xs text-slate-500 font-normal font-sans">tiket</span>
+
+                  <div className="flex items-baseline justify-between gap-2 mt-1">
+                    <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono leading-none tracking-tight">
+                      {selectedCity.informasi.toLocaleString('id-ID')}
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-bold uppercase tracking-wider">tiket</span>
                   </div>
                 </div>
-                {/* Mini progress bar */}
-                <div className="w-full bg-indigo-100 h-2 rounded-full overflow-hidden mt-2">
-                  <div className="bg-indigo-600 h-full rounded-full transition-all duration-500" style={{ width: `${selectedCity.total > 0 ? (selectedCity.informasi / selectedCity.total) * 100 : 0}%` }}></div>
+
+                {/* Progress bar */}
+                <div className="w-full bg-indigo-100/90 h-2 rounded-full overflow-hidden mt-3 shadow-inner">
+                  <div className="bg-indigo-600 h-full rounded-full transition-all duration-500 shadow-2xs" style={{ width: `${selectedCity.total > 0 ? (selectedCity.informasi / selectedCity.total) * 100 : 0}%` }}></div>
                 </div>
               </div>
 
               {/* PERMINTAAN TINDAKAN STAT */}
-              <div className="p-4 bg-teal-50/60 border border-teal-100/90 rounded-2xl flex flex-col justify-between shadow-2xs">
+              <div className="p-3.5 sm:p-4 bg-teal-50/70 border border-teal-100 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-teal-50/90 transition-all">
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-extrabold text-teal-700 flex items-center gap-1.5">
-                      <ArrowUpRight className="h-4 w-4" />
-                      Permintaan Tindakan
-                    </span>
-                    <span className="text-[10px] font-extrabold bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full font-mono">
+                  <div className="flex items-center justify-between gap-3 mb-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="p-2 bg-teal-100/90 rounded-lg text-teal-700 shrink-0 shadow-3xs">
+                        <ArrowUpRight className="h-4.5 w-4.5" />
+                      </span>
+                      <div className="truncate">
+                        <span className="text-sm sm:text-base font-black text-teal-950 block truncate">Permintaan Tindakan</span>
+                        <span className="text-[11px] text-teal-600 font-semibold block truncate">Kebutuhan eskalasi teknis</span>
+                      </div>
+                    </div>
+                    <span className="text-xs font-black bg-teal-100 text-teal-800 px-2.5 py-1 rounded-lg font-mono shadow-3xs shrink-0 border border-teal-200/60">
                       {selectedCity.total > 0 ? Math.round((selectedCity.permintaan / selectedCity.total) * 100) : 0}%
                     </span>
                   </div>
-                  <div className="text-2xl font-black text-slate-900 font-mono mb-2">
-                    {selectedCity.permintaan} <span className="text-xs text-slate-500 font-normal font-sans">tiket</span>
+
+                  <div className="flex items-baseline justify-between gap-2 mt-1">
+                    <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono leading-none tracking-tight">
+                      {selectedCity.permintaan.toLocaleString('id-ID')}
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-bold uppercase tracking-wider">tiket</span>
                   </div>
                 </div>
-                {/* Mini progress bar */}
-                <div className="w-full bg-teal-100 h-2 rounded-full overflow-hidden mt-2">
-                  <div className="bg-teal-600 h-full rounded-full transition-all duration-500" style={{ width: `${selectedCity.total > 0 ? (selectedCity.permintaan / selectedCity.total) * 100 : 0}%` }}></div>
+
+                {/* Progress bar */}
+                <div className="w-full bg-teal-100/90 h-2 rounded-full overflow-hidden mt-3 shadow-inner">
+                  <div className="bg-teal-600 h-full rounded-full transition-all duration-500 shadow-2xs" style={{ width: `${selectedCity.total > 0 ? (selectedCity.permintaan / selectedCity.total) * 100 : 0}%` }}></div>
                 </div>
               </div>
 
               {/* PENGADUAN LAYANAN STAT */}
-              <div className="p-4 bg-amber-50/60 border border-amber-100/90 rounded-2xl flex flex-col justify-between shadow-2xs">
+              <div className="p-3.5 sm:p-4 bg-amber-50/70 border border-amber-100 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-amber-50/90 transition-all">
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-extrabold text-amber-700 flex items-center gap-1.5">
-                      <HelpCircle className="h-4 w-4" />
-                      Pengaduan Layanan
-                    </span>
-                    <span className="text-[10px] font-extrabold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-mono">
+                  <div className="flex items-center justify-between gap-3 mb-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="p-2 bg-amber-100/90 rounded-lg text-amber-700 shrink-0 shadow-3xs">
+                        <HelpCircle className="h-4.5 w-4.5" />
+                      </span>
+                      <div className="truncate">
+                        <span className="text-sm sm:text-base font-black text-amber-950 block truncate">Pengaduan Layanan</span>
+                        <span className="text-[11px] text-amber-600 font-semibold block truncate">Keluhan & isu operasional</span>
+                      </div>
+                    </div>
+                    <span className="text-xs font-black bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-mono shadow-3xs shrink-0 border border-amber-200/60">
                       {selectedCity.total > 0 ? Math.round((selectedCity.pengaduan / selectedCity.total) * 100) : 0}%
                     </span>
                   </div>
-                  <div className="text-2xl font-black text-slate-900 font-mono mb-2">
-                    {selectedCity.pengaduan} <span className="text-xs text-slate-500 font-normal font-sans">tiket</span>
+
+                  <div className="flex items-baseline justify-between gap-2 mt-1">
+                    <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono leading-none tracking-tight">
+                      {selectedCity.pengaduan.toLocaleString('id-ID')}
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-bold uppercase tracking-wider">tiket</span>
                   </div>
                 </div>
-                {/* Mini progress bar */}
-                <div className="w-full bg-amber-100 h-2 rounded-full overflow-hidden mt-2">
-                  <div className="bg-amber-500 h-full rounded-full transition-all duration-500" style={{ width: `${selectedCity.total > 0 ? (selectedCity.pengaduan / selectedCity.total) * 100 : 0}%` }}></div>
+
+                {/* Progress bar */}
+                <div className="w-full bg-amber-100/90 h-2 rounded-full overflow-hidden mt-3 shadow-inner">
+                  <div className="bg-amber-500 h-full rounded-full transition-all duration-500 shadow-2xs" style={{ width: `${selectedCity.total > 0 ? (selectedCity.pengaduan / selectedCity.total) * 100 : 0}%` }}></div>
                 </div>
               </div>
 
-              {/* AGGREGATES & KEPATUHAN SLA BAR */}
-              <div className="p-4 bg-slate-50 border border-slate-200/90 rounded-2xl flex flex-col justify-between shadow-2xs">
+              {/* INDIKATOR KEPATUHAN & KESESUAIAN SLA LENGKAP */}
+              <div className="p-3.5 sm:p-4 bg-slate-50/90 border border-slate-200 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-slate-100/80 transition-all">
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-extrabold text-slate-700 flex items-center gap-1.5">
-                      <Award className="h-4 w-4 text-emerald-600 shrink-0" />
-                      Kepatuhan SLA
-                    </span>
-                    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                      selectedCity.slaCompliance >= 90 ? 'bg-emerald-100 text-emerald-800' :
-                      selectedCity.slaCompliance >= 85 ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
+                  <div className="flex items-center justify-between gap-2.5 mb-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`p-2 rounded-lg shrink-0 shadow-3xs ${
+                        selectedCity.slaCompliance >= 90 ? 'bg-emerald-100 text-emerald-700' :
+                        selectedCity.slaCompliance >= 85 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'
+                      }`}>
+                        <Award className="h-4.5 w-4.5" />
+                      </span>
+                      <div className="truncate">
+                        <span className="text-sm sm:text-base font-black text-slate-900 block truncate">Kepatuhan SLA</span>
+                        <span className="text-[11px] text-slate-500 font-bold block truncate">Target: &ge; 85%</span>
+                      </div>
+                    </div>
+
+                    <span className={`text-xs font-black px-2.5 py-1 rounded-lg shadow-3xs shrink-0 font-mono border ${
+                      selectedCity.slaCompliance >= 90 ? 'bg-emerald-100 text-emerald-800 border-emerald-200/80' :
+                      selectedCity.slaCompliance >= 85 ? 'bg-amber-100 text-amber-800 border-amber-200/80' : 'bg-rose-100 text-rose-800 border-rose-200/80'
                     }`}>
-                      {selectedCity.slaCompliance >= 90 ? 'Sangat Baik' : selectedCity.slaCompliance >= 85 ? 'Baik' : 'Perlu Perhatian'}
+                      {selectedCity.slaCompliance >= 90 ? 'Optimal' : selectedCity.slaCompliance >= 85 ? 'Standar' : 'Evaluasi'}
                     </span>
                   </div>
-                  <div className="flex items-baseline justify-between mb-1">
-                    <span className={`text-2xl font-black font-mono ${
+
+                  <div className="flex items-baseline justify-between gap-2 mt-1">
+                    <div className={`text-2xl sm:text-3xl font-black font-mono leading-none tracking-tight ${
                       selectedCity.slaCompliance >= 90 ? 'text-emerald-600' :
                       selectedCity.slaCompliance >= 85 ? 'text-amber-600' : 'text-rose-600'
                     }`}>
                       {selectedCity.slaCompliance}%
+                    </div>
+                    <span className={`inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full border shadow-2xs ${
+                      selectedCity.slaCompliance >= 90 ? 'bg-emerald-50 text-emerald-700 border-emerald-300' :
+                      selectedCity.slaCompliance >= 85 ? 'bg-amber-50 text-amber-700 border-amber-300' : 'bg-rose-50 text-rose-700 border-rose-300'
+                    }`}>
+                      {selectedCity.slaCompliance >= 85 ? (
+                        <CheckCircle2 className="h-3 w-3 text-emerald-600 shrink-0" />
+                      ) : (
+                        <AlertCircle className="h-3 w-3 text-rose-600 shrink-0" />
+                      )}
+                      {selectedCity.slaCompliance >= 85 ? `+${(selectedCity.slaCompliance - 85).toFixed(1)}%` : `${(selectedCity.slaCompliance - 85).toFixed(1)}%`}
                     </span>
-                    <span className="text-xs text-slate-500 font-medium">Target &ge; 85%</span>
                   </div>
                 </div>
-                <div className="text-[11px] text-slate-500 border-t border-slate-200/60 pt-2 mt-2 flex items-center justify-between">
-                  <span>Respons Tepat Waktu</span>
-                  <span className="font-bold text-slate-800">{selectedCity.total} Tiket Handled</span>
+
+                {/* SLA Progress Bar */}
+                <div className="relative w-full bg-slate-200 h-2 rounded-full overflow-hidden mt-3 shadow-inner">
+                  <div 
+                    className={`h-full rounded-full transition-all duration-500 shadow-2xs ${
+                      selectedCity.slaCompliance >= 90 ? 'bg-emerald-500' :
+                      selectedCity.slaCompliance >= 85 ? 'bg-amber-500' : 'bg-rose-500'
+                    }`} 
+                    style={{ width: `${Math.min(100, Math.max(0, selectedCity.slaCompliance))}%` }}
+                  ></div>
                 </div>
               </div>
 
             </div>
+            </>
           ) : (
-            <div className="py-12 text-center text-slate-400">
+            <div className="py-12 text-center text-slate-400 my-auto">
               <Info className="h-8 w-8 mx-auto mb-2 text-slate-300 animate-pulse" />
               <p className="text-xs font-bold">Silakan pilih titik kota pada peta untuk memunculkan detail laporan.</p>
             </div>
           )}
         </div>
 
-        <div className="mt-5 border-t border-slate-100 pt-3 flex items-center gap-2 justify-between text-[10px] text-slate-400 font-medium">
+        <div className="mt-4 border-t border-slate-100 pt-3 flex items-center gap-2 justify-between text-[10px] text-slate-400 font-medium shrink-0">
           <span>Sistem Pemetaan Kantor Cabang & Stat Laporan</span>
           <span className="text-indigo-600 font-bold flex items-center gap-1">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
@@ -2292,6 +2454,33 @@ export default function IndonesiaMap({
           </span>
         </div>
       </div>
+      )}
+
+      {/* PENGELOMPOKAN KATEGORI & POKOK MASALAH (REFERENSI TOPIK MASALAH) */}
+      <TopikMasalahBreakdownSection
+        cities={
+          selectedCity
+            ? selectedCity.id === 'aggregated_filter_selection'
+              ? uniqueCities
+              : [selectedCity]
+            : uniqueCities
+        }
+        scopeLabel={
+          selectedCity
+            ? isKepwilFilterActive && !isKCFilterActive && !selectedCityId
+              ? `Kedeputian Wilayah ${selectedCity.name.replace(/^(kedeputian\s+wilayah|kepwil)\s*/i, '')}`
+              : `KC ${selectedCity.name}`
+            : 'Keseluruhan Nasional'
+        }
+        isLocationSelected={Boolean(selectedCity)}
+        onResetLocation={() => {
+          if (selectedCityId) {
+            setSelectedCityId(null);
+          } else {
+            handleResetAllFilters();
+          }
+        }}
+      />
 
       {/* TOP 10 & BOTTOM 10 LAYANAN / KANTOR CABANG SECTION */}
       <div className="col-span-12 lg:col-span-12 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">

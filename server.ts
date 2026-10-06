@@ -17,15 +17,33 @@ async function startServer() {
     }
 
     try {
-      // Extract spreadsheet ID from link
-      const idMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-      const spreadsheetId = idMatch ? idMatch[1] : null;
+      const trimmed = url.trim();
+      let spreadsheetId: string | null = null;
+      let pubId: string | null = null;
+      let isPublished = false;
 
-      if (!spreadsheetId) {
+      const pubMatch = trimmed.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/e\/([a-zA-Z0-9-_]+)/);
+      if (pubMatch) {
+        pubId = pubMatch[1];
+        isPublished = true;
+      } else {
+        const idMatch = trimmed.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9-_]+)/);
+        if (idMatch && idMatch[1] !== 'e') {
+          spreadsheetId = idMatch[1];
+        } else {
+          const fileMatch = trimmed.match(/\/file\/d\/([a-zA-Z0-9-_]+)/);
+          if (fileMatch) spreadsheetId = fileMatch[1];
+        }
+      }
+
+      if (!spreadsheetId && !pubId) {
         return res.status(400).json({ error: "Format link Google Sheet tidak valid." });
       }
 
-      const candidateUrls = [
+      const candidateUrls = isPublished && pubId ? [
+        `https://docs.google.com/spreadsheets/d/e/${pubId}/pubhtml`,
+        `https://docs.google.com/spreadsheets/d/e/${pubId}/htmlview`
+      ] : [
         `https://docs.google.com/spreadsheets/d/${spreadsheetId}/htmlview`,
         `https://docs.google.com/spreadsheets/d/${spreadsheetId}/pubhtml`,
         `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit?usp=sharing`
@@ -36,7 +54,6 @@ async function startServer() {
 
       const cleanSheetName = (rawName: string): string => {
         let name = rawName.replace(/<[^>]*>/g, "").trim();
-        // Strip leading/trailing quotes if present
         if ((name.startsWith('"') && name.endsWith('"')) || (name.startsWith("'") && name.endsWith("'"))) {
           name = name.slice(1, -1);
         }
@@ -44,7 +61,6 @@ async function startServer() {
           name = JSON.parse(`"${name}"`);
         } catch (e) {}
         
-        // Unescape HTML entities & unicode escape codes
         name = name
           .replace(/&amp;/g, "&")
           .replace(/&#39;/g, "'")
@@ -93,7 +109,6 @@ async function startServer() {
           const text = await resp.text();
 
           // Pattern 1: HTML sheet-button list items in htmlview / pubhtml
-          // e.g. <li id="sheet-button-0" class="shim"><a href="#gid=0">Nama Sheet</a></li>
           const htmlBtnRegex = /id=["']sheet-button-(\d+)["'][^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/gi;
           let match: RegExpExecArray | null;
           while ((match = htmlBtnRegex.exec(text)) !== null) {
@@ -101,14 +116,12 @@ async function startServer() {
           }
 
           // Pattern 2: HTML links with gid in pubhtml / htmlview
-          // e.g. <a href="?gid=123456&single=true">Nama Sheet</a> or href="#gid=123456">Nama Sheet</a>
           const htmlGidRegex = /<a[^>]*href=["'][^"']*(?:gid=|\#gid=)(\d+)[^"']*["'][^>]*>([^<]+)<\/a>/gi;
           while ((match = htmlGidRegex.exec(text)) !== null) {
             addSheet(match[1], match[2]);
           }
 
-          // Pattern 3: Explicit sheetId property in Google Sheets JS model (ONLY sheetId, not generic id)
-          // e.g. "sheetId": 123456, "title": "Nama Sheet"
+          // Pattern 3: Explicit sheetId property in Google Sheets JS model
           const jsonSheetIdRegex = /"sheetId"\s*:\s*(\d+)\s*,\s*"title"\s*:\s*"([^"]+)"/gi;
           while ((match = jsonSheetIdRegex.exec(text)) !== null) {
             addSheet(match[1], match[2]);
@@ -120,7 +133,6 @@ async function startServer() {
           }
 
           // Pattern 4: Nested properties object
-          // e.g. "properties":{"sheetId":123456,"title":"Nama Sheet"}
           const jsonNestedRegex = /"properties"\s*:\s*\{\s*"sheetId"\s*:\s*(\d+)\s*,\s*"title"\s*:\s*"([^"]+)"/gi;
           while ((match = jsonNestedRegex.exec(text)) !== null) {
             addSheet(match[1], match[2]);
@@ -154,23 +166,62 @@ async function startServer() {
     }
 
     try {
-      const idMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-      const spreadsheetId = idMatch ? idMatch[1] : null;
+      const trimmed = url.trim();
+      let spreadsheetId: string | null = null;
+      let pubId: string | null = null;
+      let isPublished = false;
 
-      if (!spreadsheetId) {
+      const pubMatch = trimmed.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/e\/([a-zA-Z0-9-_]+)/);
+      if (pubMatch) {
+        pubId = pubMatch[1];
+        isPublished = true;
+      } else {
+        const idMatch = trimmed.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9-_]+)/);
+        if (idMatch && idMatch[1] !== 'e') {
+          spreadsheetId = idMatch[1];
+        } else {
+          const fileMatch = trimmed.match(/\/file\/d\/([a-zA-Z0-9-_]+)/);
+          if (fileMatch) spreadsheetId = fileMatch[1];
+        }
+      }
+
+      // Direct URL fetch if it's already an export link or direct file
+      if (trimmed.startsWith("http") && (trimmed.includes(".csv") || trimmed.includes("output=csv") || trimmed.includes("format=csv"))) {
+        try {
+          const directResp = await fetch(trimmed);
+          if (directResp.ok) {
+            const dText = await directResp.text();
+            if (dText && !dText.includes("<!DOCTYPE html>") && !dText.includes("<html")) {
+              res.setHeader("Content-Type", "text/csv; charset=utf-8");
+              return res.send(dText);
+            }
+          }
+        } catch (e) {
+          // continue to candidates
+        }
+      }
+
+      if (!spreadsheetId && !pubId) {
         return res.status(400).json({ error: "Format link Google Sheet tidak valid." });
       }
 
       const activeGid = typeof gid === "string" && gid ? gid : "0";
 
-      // Attempt 1: Direct full export endpoint (returns all rows and columns without any gviz query limits)
-      const exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${activeGid}`;
-      // Attempt 2: gviz/tq endpoint with explicit select * for full row/col extraction
-      const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&tq=${encodeURIComponent('select *')}&gid=${activeGid}`;
-      // Attempt 3: pub?output=csv endpoint
-      const pubUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/pub?output=csv&gid=${activeGid}`;
+      const candidateUrls = isPublished && pubId ? [
+        `https://docs.google.com/spreadsheets/d/e/${pubId}/pub?gid=${activeGid}&single=true&output=csv`,
+        `https://docs.google.com/spreadsheets/d/e/${pubId}/pub?output=csv&gid=${activeGid}`,
+        `https://docs.google.com/spreadsheets/d/e/${pubId}/pub?output=csv`
+      ] : [
+        // Attempt 1: Direct full export endpoint
+        `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${activeGid}`,
+        // Attempt 2: gviz/tq endpoint with explicit select *
+        `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&tq=${encodeURIComponent('select *')}&gid=${activeGid}`,
+        // Attempt 3: pub?output=csv endpoint
+        `https://docs.google.com/spreadsheets/d/${spreadsheetId}/pub?output=csv&gid=${activeGid}`,
+        // Attempt 4: gviz/tq json fallback
+        `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&gid=${activeGid}`
+      ];
 
-      const candidateUrls = [exportUrl, gvizUrl, pubUrl];
       let csvText = "";
       let fetchSuccess = false;
 
@@ -179,12 +230,12 @@ async function startServer() {
           const resp = await fetch(targetUrl, {
             headers: {
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-              "Accept": "text/csv,text/plain,*/*"
+              "Accept": "text/csv,text/plain,application/json,*/*"
             }
           });
           if (resp.ok) {
             const text = await resp.text();
-            // Check if returned content looks like HTML login page or valid CSV
+            // Check if returned content is not HTML login/denied page
             if (text && !text.includes("<!DOCTYPE html>") && !text.includes("<html")) {
               csvText = text;
               fetchSuccess = true;
@@ -198,7 +249,7 @@ async function startServer() {
 
       if (!fetchSuccess || !csvText.trim()) {
         return res.status(400).json({
-          error: "Gagal mengambil data CSV Google Sheet. Pastikan spreadsheet diatur ke 'Siapa saja yang memiliki link dapat melihat' (Anyone with the link can view)."
+          error: "Gagal mengambil data CSV Google Sheet. Pastikan spreadsheet diatur ke 'Siapa saja yang memiliki link dapat melihat' (General Access: Anyone with the link can view) pada menu Bagikan (Share)."
         });
       }
 
@@ -213,7 +264,7 @@ async function startServer() {
   // Endpoint for SMS (Super Mind Senada) AI recommendations via Google Gemini
   app.post("/api/gemini/recommendations", async (req, res) => {
     try {
-      const { kantorCabang, kepwil, selectedBulan, branchMetrics, citiesSummary } = req.body;
+      const { kantorCabang, kepwil, selectedBulan, selectedTopik, branchMetrics, citiesSummary } = req.body;
 
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
@@ -235,48 +286,66 @@ async function startServer() {
 
       const bm = branchMetrics || {};
       const targetName = kantorCabang || bm.branchName || 'Seluruh Kantor Cabang';
+      const topTopikList: Array<{
+        topikMasalah: string;
+        pokokMasalah: string;
+        jenisKategori: string;
+        count: number;
+        percentageOfTotal: number;
+      }> = Array.isArray(bm.topTopikList) ? bm.topTopikList.slice(0, 10) : [];
+
+      const topTopikFormatted = topTopikList.length > 0
+        ? topTopikList
+            .map(
+              (t, idx) =>
+                `   ${idx + 1}. Topik Masalah: "${t.topikMasalah}" | Pokok Masalah: ${t.pokokMasalah} | Kategori: ${t.jenisKategori} | Jumlah: ${t.count} tiket (${t.percentageOfTotal}%)`
+            )
+            .join("\n")
+        : "   1. Topik Masalah: Perubahan Data Peserta | Pokok Masalah: Administrasi | Kategori: Permintaan";
 
       const prompt = `Anda adalah konsultan manajemen strategis dan AI Layanan Publik profesional (Super Mind Senada - SMS).
-Tugas Anda adalah memberikan rekomendasi perbaikan dan strategi operasional yang DIBUAT KHUSUS (TAILORED) UNTUK KANTOR CABANG SINKRON DENGAN DATA KONKRET BERIKUT:
+Tugas Anda adalah memberikan rekomendasi perbaikan dan strategi operasional yang MENGACU LANGSUNG PADA DATA GOOGLE SHEET BERDASARKAN TOPIK MASALAH BERIKUT:
 
 Target Kantor Cabang: ${targetName}
 KEPWIL: ${kepwil || bm.kepwilName || 'Semua'}
 Bulan/Periode: ${selectedBulan || 'Semua'}
+Fokus Filter Topik Masalah: ${selectedTopik && selectedTopik !== 'Semua' ? selectedTopik : 'Top 10 Topik Masalah Tertinggi'}
 
-DATA SINKRON KINERJA UNIT (${targetName}):
-1. Jumlah Layanan (Total): ${bm.totalLayanan || citiesSummary?.totalInformasi + citiesSummary?.totalPermintaan + citiesSummary?.totalPengaduan || 0} layanan
+DATA SINKRON GOOGLE SHEET KINERJA UNIT (${targetName}):
+1. Jumlah Layanan (Total): ${bm.totalLayanan || (citiesSummary?.totalInformasi + citiesSummary?.totalPermintaan + citiesSummary?.totalPengaduan) || 0} tiket
 2. Penyelesaian SLA: ${bm.slaCompliance || citiesSummary?.avgSla || 0}% Compliance (Rata-rata Durasi SLA: ${bm.avgSlaDays || 2.0} Hari)
-3. Rincian Jumlah Layanan per Kategori:
-   - Layanan Informasi: ${bm.informasi || citiesSummary?.totalInformasi || 0}
-   - Layanan Permintaan: ${bm.permintaan || citiesSummary?.totalPermintaan || 0}
-   - Layanan Pengaduan: ${bm.pengaduan || citiesSummary?.totalPengaduan || 0}
-4. Rincian Pokok Masalah (Root Cause Issues):
-   - Pokok Masalah Administrasi (Kepesertaan/Data): ${bm.administrasi || 0} kasus
-   - Pokok Masalah Iuran (Pembayaran/Tagihan/Autodebet): ${bm.iuran || 0} kasus
-   - Pokok Masalah Pelayanan Kesehatan (Faskes/RS/Klaim): ${bm.pelayananKesehatan || 0} kasus
+3. Rincian Jumlah Layanan per Jenis Kategori:
+   - Layanan Informasi: ${bm.informasi || citiesSummary?.totalInformasi || 0} tiket
+   - Layanan Permintaan: ${bm.permintaan || citiesSummary?.totalPermintaan || 0} tiket
+   - Layanan Pengaduan: ${bm.pengaduan || citiesSummary?.totalPengaduan || 0} tiket
+4. Rincian Pengelompokan Pokok Masalah:
+   - Pokok Masalah Administrasi: ${bm.administrasi || 0} tiket
+   - Pokok Masalah Iuran: ${bm.iuran || 0} tiket
+   - Pokok Masalah Pelayanan Kesehatan: ${bm.pelayananKesehatan || 0} tiket
+5. DAFTAR TOP TOPIK MASALAH DARI GOOGLE SHEET (ACUAN UTAMA REKOMENDASI):
+${topTopikFormatted}
 
-PERINTAH KHUSUS KONTEN REKOMENDASI:
-- Buat rekomendasi yang UNIK dan BERBEDA-BEDA untuk Kantor Cabang ini!
-- WAJIB menyebutkan angka-angka konkret dari data di atas secara eksplisit pada setiap deskripsi rekomendasi, target KPI, dan langkah tindakan (Jumlah Layanan, % SLA, Informasi, Permintaan, Pengaduan, Administrasi, Iuran, dan Pelayanan Kesehatan).
-- Berikan analisis penyebab dan solusi taktis jika pokok masalah ${bm.dominantPokokMasalah || 'Administrasi'} atau pengaduan tergolong tinggi.
+PERINTAH KHUSUS KONTEN REKOMENDASI BERDASARKAN TOPIK MASALAH:
+- Setiap item rekomendasi WAJIB mengacu secara spesifik pada salah satu Topik Masalah dari daftar Google Sheet di atas (isi field topikMasalah, pokokMasalah, jenisKategori, dan topikCount sesuai data di atas).
+- Jika Fokus Filter Topik Masalah adalah "${selectedTopik && selectedTopik !== 'Semua' ? selectedTopik : 'Semua'}", prioritaskan pembahasan mendalam untuk topik masalah tersebut di seluruh tahap waktu dan aspek.
+- WAJIB menyebutkan nama Topik Masalah beserta angka jumlah tiketnya dari Google Sheet secara eksplisit pada Judul (title), Deskripsi (description), Target KPI (kpiTarget), dan Langkah Tindakan (actionSteps).
 - LANGKAH TINDAKAN OPERASIONAL (actionSteps) Harus SANGAT KONKRET, PRAKTIS, & SANGAT MUDAH DIPAHAMI:
-  * Tuliskan setiap instruksi tindakan dengan format perintah operasional langsung (Contoh: "Briefing Pagi Jam 07:45: Evaluasi target penyelesaian 15 berkas pengaduan...", "Rotasi Jam Puncak 10:00-14:00: Alihkan 2 staf back-office ke loket bantuan...", "Pasang Banner QR Code 'Cek Status Mandiri' di ruang tunggu...").
-  * Hindari bahasa jargon teoritis yang abstrak. Gunakan langkah 1, 2, 3 yang spesifik, ada angka targetnya, waktu pelaksanaan, dan penanggung jawab yang jelas.
+  * Tuliskan setiap instruksi tindakan dengan format perintah operasional langsung yang menyebutkan Topik Masalahnya (Contoh: "Briefing Pagi Jam 07:45: Evaluasi target penyelesaian tiket topik '${bm.dominantTopikMasalah || 'Perubahan Data Peserta'}'...", "Rotasi Jam Puncak 10:00-14:00: Tugaskan 2 verifikator khusus pokok masalah ${bm.dominantTopikPokok || 'Administrasi'}...", "Pasang QR Code Panduan Mandiri topik '${bm.dominantTopikMasalah || 'Perubahan Data Peserta'}' di ruang tunggu...").
 
 SYARAT WAJIB STRUKTUR OUTPUT:
 1. Rekomendasi dibagi menjadi 3 Tahap Waktu:
-   - Jangka Pendek (1 - 3 Bulan): Taktis, respon cepat, pembenahan antrean & alokasi jam sibuk staf.
-   - Jangka Menengah (3 - 6 Bulan): Standardisasi SOP, capacity building, koordinasi KEPWIL, integrasi tools monitoring.
-   - Jangka Panjang (6 - 12+ Bulan): Transformasi digital penuh, otomatisasi AI Senada, budaya kerja berbasis analitik.
+   - Jangka Pendek (1 - 3 Bulan): Taktis, respon cepat penguraian antrean Topik Masalah tertinggi.
+   - Jangka Menengah (3 - 6 Bulan): Standardisasi SOP lintas bidang, upskilling petugas pada Topik Masalah dominan, sistem peringatan dini.
+   - Jangka Panjang (6 - 12+ Bulan): Pencegahan hulu (preventive action) dan otomatisasi penyelesaian mandiri berbasis Topik Masalah.
 2. Setiap Tahap Waktu WAJIB mencakup 3 Aspek Utama:
-   - People: SDM, pelatihan empati/krisis, rotasi jam sibuk, budaya layanan, reskilling.
-   - Proses: SOP layanan, alur tindak lanjut pengaduan, fast-track SLA escalation, audit kualitas.
-   - Tools: Perangkat IT, dashboard monitoring Senada, otomatisasi WhatsApp/PWA, Kios Mandiri.
+   - People (aspect: "people", aspectLabel: "People")
+   - Proses (aspect: "proses", aspectLabel: "Proses")
+   - Tools (aspect: "tools", aspectLabel: "Tools")
 
-Hasilkan minimal 9 item rekomendasi (3 per Tahap Waktu, mencakup aspek People, Proses, dan Tools).`;
+Hasilkan tepat 9 item rekomendasi (3 per Tahap Waktu: pendek, menengah, panjang; masing-masing mencakup aspek people, proses, dan tools).`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -301,12 +370,29 @@ Hasilkan minimal 9 item rekomendasi (3 per Tahap Waktu, mencakup aspek People, P
                     impactLevel: { type: Type.STRING },
                     targetBranch: { type: Type.STRING },
                     kpiTarget: { type: Type.STRING },
+                    topikMasalah: { type: Type.STRING },
+                    pokokMasalah: { type: Type.STRING },
+                    jenisKategori: { type: Type.STRING },
+                    topikCount: { type: Type.NUMBER },
                     actionSteps: {
                       type: Type.ARRAY,
                       items: { type: Type.STRING }
                     }
                   },
-                  required: ["id", "title", "description", "aspect", "aspectLabel", "timeframe", "timeframeLabel", "impactLevel", "actionSteps"]
+                  required: [
+                    "id",
+                    "title",
+                    "description",
+                    "aspect",
+                    "aspectLabel",
+                    "timeframe",
+                    "timeframeLabel",
+                    "impactLevel",
+                    "topikMasalah",
+                    "pokokMasalah",
+                    "jenisKategori",
+                    "actionSteps"
+                  ]
                 }
               }
             },

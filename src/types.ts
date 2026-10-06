@@ -19,6 +19,12 @@ export interface CityData {
   kepwil?: string;
   kantorCabang?: string;
   rawRow?: Record<string, any>;
+  pokokMasalahBreakdown?: {
+    Informasi: { Administrasi: number; Iuran: number; 'Pelayanan Kesehatan': number };
+    Permintaan: { Administrasi: number; Iuran: number; 'Pelayanan Kesehatan': number };
+    Pengaduan: { Administrasi: number; Iuran: number; 'Pelayanan Kesehatan': number };
+  };
+  topikBreakdown?: Record<string, number>;
 }
 
 export interface Ticket {
@@ -106,6 +112,10 @@ export interface StrategicRecommendationItem {
   impactLevel: 'Tinggi' | 'Sedang' | 'Kritis';
   targetBranch?: string;
   kpiTarget?: string;
+  topikMasalah?: string;
+  pokokMasalah?: string;
+  jenisKategori?: string;
+  topikCount?: number;
   actionSteps: string[];
 }
 

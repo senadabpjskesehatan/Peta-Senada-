@@ -29,16 +29,17 @@ import {
 } from 'lucide-react';
 import { CityData, SmsRecommendationResponse, StrategicRecommendationItem } from '../types';
 import { generateFallbackRecommendations, extractBranchMetrics } from '../utils/smsHelper';
+import { parseFilterValueList } from '../utils/monthHelper';
 import SearchableFilterSelect from './SearchableFilterSelect';
 
 interface SuperMindSenadaProps {
   citiesData: CityData[];
-  selectedBulan: string;
-  onSelectedBulanChange: (b: string) => void;
-  selectedKepwil: string;
-  onSelectedKepwilChange: (k: string) => void;
-  selectedKantorCabang: string;
-  onSelectedKantorCabangChange: (kc: string) => void;
+  selectedBulan: string | string[];
+  onSelectedBulanChange: (b: string | string[]) => void;
+  selectedKepwil: string | string[];
+  onSelectedKepwilChange: (k: string | string[]) => void;
+  selectedKantorCabang: string | string[];
+  onSelectedKantorCabangChange: (kc: string | string[]) => void;
   availableBulanList: string[];
   availableKepwilList: string[];
   availableKantorCabangList: string[];
@@ -67,6 +68,15 @@ export default function SuperMindSenada({
   const [isFilterExpanded, setIsFilterExpanded] = useState<boolean>(true);
   const [timeframeFilter, setTimeframeFilter] = useState<'all' | 'pendek' | 'menengah' | 'panjang'>('all');
   const [aspectFilter, setAspectFilter] = useState<'all' | 'people' | 'proses' | 'tools'>('all');
+  const [selectedTopikFilter, setSelectedTopikFilter] = useState<string>('Semua');
+
+  const kcList = parseFilterValueList(selectedKantorCabang);
+  const kwList = parseFilterValueList(selectedKepwil);
+  const blnList = parseFilterValueList(selectedBulan);
+
+  const displayKC = kcList.length > 0 ? kcList.join(', ') : 'Semua Kantor Cabang';
+  const displayKEPWIL = kwList.length > 0 ? kwList.join(', ') : 'Semua Wilayah';
+  const displayBulan = blnList.length > 0 ? blnList.join(', ') : 'Semua Bulan';
 
   // Compute aggregate metrics for prompt grounding
   const metricsSummary = useMemo(() => {
@@ -100,30 +110,22 @@ export default function SuperMindSenada({
     };
   }, [citiesData]);
 
-  // Active Branch Metrics calculated directly from synchronized dataset
+  // Active Branch Metrics calculated directly from synchronized dataset & Topik Masalah reference
   const activeBranchMetrics = useMemo(() => {
     return extractBranchMetrics(selectedKantorCabang, selectedKepwil, citiesData);
   }, [selectedKantorCabang, selectedKepwil, citiesData]);
 
-  // Initial recommendation state loaded with fallback
+  // Initial recommendation state loaded with fallback grounded on Topik Masalah
   const [recommendationData, setRecommendationData] = useState<SmsRecommendationResponse>(() => {
-    return generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData);
+    return generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, 'Semua');
   });
 
-  // Re-generate or sync fallback when selected branch changes locally if not loading
+  // Re-generate or sync fallback when selected branch or topik filter changes locally
   useEffect(() => {
-    setRecommendationData((prev) => {
-      // Keep Gemini recommendations if already generated custom, but update branch context if needed
-      if (prev && !prev.isFallback) {
-        return {
-          ...prev,
-          kantorCabangTarget: selectedKantorCabang !== 'Semua' ? selectedKantorCabang : 'Seluruh Kantor Cabang',
-          kepwilTarget: selectedKepwil !== 'Semua' ? selectedKepwil : 'Seluruh KEPWIL',
-        };
-      }
-      return generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData);
-    });
-  }, [selectedKantorCabang, selectedKepwil, citiesData]);
+    setRecommendationData(
+      generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter)
+    );
+  }, [selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter]);
 
   // Fetch AI Recommendations from Server Route using Gemini
   const handleGenerateAiRecommendations = async () => {
@@ -135,9 +137,10 @@ export default function SuperMindSenada({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          kantorCabang: selectedKantorCabang,
-          kepwil: selectedKepwil,
-          selectedBulan: selectedBulan,
+          kantorCabang: kcList.length > 0 ? kcList.join(', ') : 'Semua',
+          kepwil: kwList.length > 0 ? kwList.join(', ') : 'Semua',
+          selectedBulan: blnList.length > 0 ? blnList.join(', ') : 'Semua',
+          selectedTopik: selectedTopikFilter,
           branchMetrics: activeBranchMetrics,
           citiesSummary: metricsSummary,
         }),
@@ -150,9 +153,9 @@ export default function SuperMindSenada({
       const result = await response.json();
       if (result.success && result.data) {
         setRecommendationData({
-          summary: result.data.summary || 'Rekomendasi strategi telah berhasil disusun oleh AI Google.',
-          kantorCabangTarget: selectedKantorCabang !== 'Semua' ? selectedKantorCabang : 'Seluruh Kantor Cabang',
-          kepwilTarget: selectedKepwil !== 'Semua' ? selectedKepwil : 'Seluruh KEPWIL',
+          summary: result.data.summary || 'Rekomendasi strategi berdasarkan Topik Masalah Google Sheet telah berhasil disusun oleh AI Google.',
+          kantorCabangTarget: kcList.length > 0 ? kcList.join(', ') : 'Seluruh Kantor Cabang',
+          kepwilTarget: kwList.length > 0 ? kwList.join(', ') : 'Seluruh KEPWIL',
           overallScore: result.data.overallScore || 85,
           healthStatus: result.data.healthStatus || 'Perlu Perhatian',
           recommendations: result.data.recommendations || [],
@@ -160,12 +163,15 @@ export default function SuperMindSenada({
           isFallback: false,
         });
       } else {
-        // Fallback gracefully
-        setRecommendationData(generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData));
+        setRecommendationData(
+          generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter)
+        );
       }
     } catch (err) {
       console.warn('Fallback to local algorithm due to server response:', err);
-      setRecommendationData(generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData));
+      setRecommendationData(
+        generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter)
+      );
     } finally {
       setLoading(false);
     }
@@ -181,7 +187,8 @@ export default function SuperMindSenada({
   const handleCopyCard = (item: StrategicRecommendationItem) => {
     const text = `[REKOMENDASI SMS - ${item.timeframeLabel.toUpperCase()} - ASPEK ${item.aspectLabel.toUpperCase()}]
 Judul: ${item.title}
-Target Unit: ${item.targetBranch || selectedKantorCabang}
+Acuan Topik Masalah (Google Sheet): ${item.topikMasalah || activeBranchMetrics.dominantTopikMasalah} (${item.jenisKategori || '-'} / ${item.pokokMasalah || '-'}${item.topikCount ? ` - ${item.topikCount} Tiket` : ''})
+Target Unit: ${item.targetBranch || (kcList.length > 0 ? kcList.join(', ') : 'Seluruh Kantor Cabang')}
 Tingkat Dampak: ${item.impactLevel}
 
 Deskripsi:
@@ -197,11 +204,20 @@ ${item.actionSteps.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}`;
 
   const handleCopyFullReport = () => {
     if (!recommendationData) return;
-    const report = `=== LAPORAN STRATEGI & REKOMENDASI PERBAIKAN SMS (SUPER MIND SENADA) ===
+    const topTopicsReport = activeBranchMetrics.topTopikList
+      .slice(0, 10)
+      .map((t, idx) => `  ${idx + 1}. ${t.topikMasalah} [${t.jenisKategori} - ${t.pokokMasalah}]: ${t.count} tiket (${t.percentageOfTotal}%)`)
+      .join('\n');
+
+    const report = `=== LAPORAN STRATEGI & REKOMENDASI PERBAIKAN SMS (BERDASARKAN TOPIK MASALAH GOOGLE SHEET) ===
 Target Kantor Cabang: ${recommendationData.kantorCabangTarget}
 KEPWIL: ${recommendationData.kepwilTarget || 'Semua'}
+Fokus Topik Masalah: ${selectedTopikFilter === 'Semua' ? 'Top 10 Topik Masalah Tertinggi' : selectedTopikFilter}
 Skor Kesehatan Operasional: ${recommendationData.overallScore}/100 (${recommendationData.healthStatus})
 Tanggal Dibuat: ${recommendationData.generatedAt}
+
+ACUAN TOP TOPIK MASALAH DARI GOOGLE SHEET:
+${topTopicsReport}
 
 RINGKASAN EKSEKUTIF:
 ${recommendationData.summary}
@@ -211,6 +227,7 @@ DAFTAR REKOMENDASI STRATEGIS (3 TAHAP & 3 ASPEK):
 ${recommendationData.recommendations.map((rec, i) => `
 ${i + 1}. [${rec.timeframeLabel.toUpperCase()}] - ASPEK: ${rec.aspectLabel.toUpperCase()}
 Judul: ${rec.title}
+Acuan Topik Masalah: ${rec.topikMasalah || '-'} (${rec.jenisKategori || '-'} / ${rec.pokokMasalah || '-'}${rec.topikCount ? ` - ${rec.topikCount} Tiket` : ''})
 Tingkat Dampak: ${rec.impactLevel}
 Deskripsi: ${rec.description}
 Langkah Tindakan:
@@ -276,10 +293,10 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
             </div>
             <h2 className="text-lg md:text-xl font-black tracking-tight text-white flex items-center gap-2">
               <BrainCircuit className="w-5 h-5 text-indigo-400 shrink-0" />
-              <span>Rekomendasi Strategis & Perbaikan Kantor Cabang</span>
+              <span>Rekomendasi Strategis AI Berdasarkan Topik Masalah (Google Sheet)</span>
             </h2>
             <p className="text-slate-300 text-xs leading-relaxed font-normal">
-              Diagnosis operasional AI berdasarkan data layanan terintegrasi Senada: <strong>3 Tahap Waktu</strong> (Pendek, Menengah, Panjang) & <strong>3 Aspek Utama</strong> (People, Proses, Tools).
+              Diagnosis operasional AI yang mengacu langsung pada data Google Sheet berdasarkan <strong>Topik Masalah</strong>, <strong>Pokok Masalah</strong>, &amp; <strong>Jenis Kategori</strong> dalam <strong>3 Tahap Waktu</strong> &amp; <strong>3 Aspek Utama</strong> (People, Proses, Tools).
             </p>
           </div>
 
@@ -315,26 +332,28 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
             </span>
             <span className="bg-slate-800/90 border border-slate-700/80 px-2 py-0.5 rounded-md text-white font-bold flex items-center gap-1">
               <Building2 className="w-3 h-3 text-blue-400" />
-              {selectedKantorCabang !== 'Semua' ? selectedKantorCabang : 'Semua Kantor Cabang'}
+              {displayKC}
             </span>
-            {selectedKepwil !== 'Semua' && (
+            {kwList.length > 0 && (
               <span className="bg-slate-800/90 border border-slate-700/80 px-2 py-0.5 rounded-md text-white font-bold flex items-center gap-1">
                 <Landmark className="w-3 h-3 text-emerald-400" />
-                {selectedKepwil}
+                {displayKEPWIL}
               </span>
             )}
-            {selectedBulan !== 'Semua' && (
+            {blnList.length > 0 && (
               <span className="bg-slate-800/90 border border-slate-700/80 px-2 py-0.5 rounded-md text-white font-bold flex items-center gap-1">
                 <Calendar className="w-3 h-3 text-amber-400" />
-                {selectedBulan}
+                {displayBulan}
               </span>
             )}
           </div>
 
-          <div className="text-[11px] text-slate-400 flex items-center gap-2.5">
+          <div className="text-[11px] text-slate-400 flex items-center gap-2.5 flex-wrap">
+            <span>Topik Tertinggi: <strong className="text-indigo-300 font-bold">{activeBranchMetrics.dominantTopikMasalah} ({activeBranchMetrics.dominantTopikCount.toLocaleString('id-ID')} Tiket)</strong></span>
+            <span>•</span>
             <span>SLA: <strong className="text-emerald-400 font-bold">{metricsSummary.avgSla}%</strong></span>
             <span>•</span>
-            <span>Pengaduan: <strong className="text-amber-400 font-bold">{metricsSummary.totalPengaduan}</strong></span>
+            <span>Pengaduan: <strong className="text-amber-400 font-bold">{metricsSummary.totalPengaduan.toLocaleString('id-ID')}</strong></span>
           </div>
         </div>
       </div>
@@ -360,13 +379,16 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                 {/* Active filter summary chips */}
                 <div className="hidden sm:flex items-center gap-1.5 text-[10px]">
                   <span className="bg-indigo-50 border border-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md font-bold truncate max-w-[150px]">
-                    KC: {selectedKantorCabang}
+                    KC: {kcList.length > 0 ? kcList.join(', ') : 'Semua'}
                   </span>
                   <span className="bg-slate-100 border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold">
                     Tahap: {timeframeFilter === 'all' ? 'Semua' : timeframeFilter}
                   </span>
                   <span className="bg-slate-100 border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold">
                     Aspek: {aspectFilter === 'all' ? 'Semua' : aspectFilter}
+                  </span>
+                  <span className="bg-amber-50 border border-amber-200 text-amber-800 px-2 py-0.5 rounded-md font-bold truncate max-w-[200px]">
+                    Topik: {selectedTopikFilter === 'Semua' ? 'Top 10 Google Sheet' : selectedTopikFilter}
                   </span>
                 </div>
               </div>
@@ -497,6 +519,38 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                 </div>
               </div>
             </div>
+
+            {/* TOPIK MASALAH FILTER SELECTOR FROM GOOGLE SHEET */}
+            <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5 shrink-0">
+                <Zap className="w-3.5 h-3.5 text-amber-500" />
+                3. Fokus Acuan Topik Masalah (Data Google Sheet):
+              </label>
+              <div className="flex items-center gap-2 flex-1 max-w-xl">
+                <select
+                  value={selectedTopikFilter}
+                  onChange={(e) => setSelectedTopikFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                  id="sms-topik-masalah-select"
+                >
+                  <option value="Semua">Semua Top 10 Topik Masalah Tertinggi ({activeBranchMetrics.topTopikList.slice(0, 10).length} Topik)</option>
+                  {activeBranchMetrics.topTopikList.slice(0, 15).map((t, i) => (
+                    <option key={`${t.id}-${i}`} value={t.topikMasalah}>
+                      #{i + 1} {t.topikMasalah} — [{t.jenisKategori} / {t.pokokMasalah}] ({t.count.toLocaleString('id-ID')} Tiket)
+                    </option>
+                  ))}
+                </select>
+                {selectedTopikFilter !== 'Semua' && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTopikFilter('Semua')}
+                    className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold shrink-0 cursor-pointer"
+                  >
+                    Reset Topik
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -610,6 +664,61 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                 </span>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* 3. TOP TOPIK MASALAH DARI GOOGLE SHEET */}
+        <div className="bg-slate-800/50 rounded-2xl p-4 border border-slate-700/60 space-y-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <span className="text-xs font-black text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              3. Acuan Top Topik Masalah (Data Sinkronisasi Google Sheet)
+            </span>
+            <span className="text-[10px] text-slate-400">
+              Klik salah satu Topik Masalah untuk memfokuskan rekomendasi strategis AI:
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            <button
+              type="button"
+              onClick={() => setSelectedTopikFilter('Semua')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shrink-0 flex items-center gap-1.5 ${
+                selectedTopikFilter === 'Semua'
+                  ? 'bg-indigo-600 text-white border-indigo-400 shadow-sm'
+                  : 'bg-slate-900/80 text-slate-300 border-slate-700 hover:bg-slate-800'
+              }`}
+            >
+              <span>Semua Top 10 Topik</span>
+            </button>
+            {activeBranchMetrics.topTopikList.slice(0, 10).map((t, idx) => {
+              const isSelected = selectedTopikFilter.toLowerCase() === t.topikMasalah.toLowerCase();
+              return (
+                <button
+                  key={`${t.id}-${idx}`}
+                  type="button"
+                  onClick={() => setSelectedTopikFilter(isSelected ? 'Semua' : t.topikMasalah)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shrink-0 flex items-center gap-2 ${
+                    isSelected
+                      ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-sm'
+                      : 'bg-slate-900/80 text-slate-200 border-slate-700/80 hover:border-indigo-400/60 hover:bg-slate-800'
+                  }`}
+                  title={`${t.topikMasalah} (${t.jenisKategori} - ${t.pokokMasalah}): ${t.count} tiket (${t.percentageOfTotal}%)`}
+                >
+                  <span className={`px-1.5 py-0.2 rounded text-[10px] font-black ${
+                    isSelected ? 'bg-slate-950 text-amber-300' : 'bg-indigo-500/30 text-indigo-300'
+                  }`}>
+                    #{idx + 1}
+                  </span>
+                  <span className="truncate max-w-[200px]">{t.topikMasalah}</span>
+                  <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
+                    isSelected ? 'bg-amber-600/30 text-slate-950 font-black' : 'bg-slate-800 text-emerald-300'
+                  }`}>
+                    {t.count.toLocaleString('id-ID')}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -868,6 +977,38 @@ function RecommendationCard({
             {item.description}
           </p>
         </div>
+
+        {/* ACUAN TOPIK MASALAH GOOGLE SHEET BADGE */}
+        {item.topikMasalah && (
+          <div className="bg-amber-50/90 border border-amber-200/90 rounded-xl p-2.5 space-y-1">
+            <div className="flex items-center justify-between gap-1.5 flex-wrap">
+              <span className="text-[10px] font-black uppercase tracking-wider text-amber-800 flex items-center gap-1">
+                <Layers className="w-3 h-3 text-amber-600 shrink-0" />
+                Acuan Topik Masalah (Google Sheet):
+              </span>
+              {typeof item.topikCount === 'number' && (
+                <span className="text-[10px] font-mono font-black bg-amber-200/80 text-amber-950 px-2 py-0.5 rounded-md">
+                  {item.topikCount.toLocaleString('id-ID')} Tiket
+                </span>
+              )}
+            </div>
+            <div className="text-xs font-extrabold text-slate-900">
+              {item.topikMasalah}
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              {item.jenisKategori && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-white border border-amber-200 text-slate-700">
+                  Kategori: <strong>{item.jenisKategori}</strong>
+                </span>
+              )}
+              {item.pokokMasalah && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-white border border-amber-200 text-slate-700">
+                  Pokok: <strong>{item.pokokMasalah}</strong>
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* TARGET KPI BADGE */}
         {item.kpiTarget && (

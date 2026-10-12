@@ -22,10 +22,22 @@ export interface BranchPerformanceMetrics {
   dominantPokokMasalah: 'administrasi' | 'iuran' | 'pelayananKesehatan';
   dominantCategory: 'informasi' | 'permintaan' | 'pengaduan';
   topTopikList: AggregatedTopikItem[];
+  topPengaduanList: AggregatedTopikItem[];
+  topInformasiList: AggregatedTopikItem[];
   dominantTopikMasalah: string;
   dominantTopikPokok: string;
   dominantTopikKategori: string;
   dominantTopikCount: number;
+  dominantPengaduanTopik: string;
+  dominantPengaduanPokok: string;
+  dominantPengaduanCount: number;
+  dominantInformasiTopik: string;
+  dominantInformasiPokok: string;
+  dominantInformasiCount: number;
+  analisaPengaduanRingkas: string;
+  aksiPengaduanRingkas: string[];
+  analisaInformasiRingkas: string;
+  aksiInformasiRingkas: string[];
   isDirectTopikMatch: boolean;
 }
 
@@ -43,7 +55,7 @@ export function extractBranchMetrics(
   // Filter matching cities
   let filtered = cities;
   if (branchList.length > 0) {
-    filtered = cities.filter(c => 
+    filtered = cities.filter(c =>
       isKantorCabangMatching(c.kantorCabang, targetBranch) ||
       isKantorCabangMatching(c.name, targetBranch)
     );
@@ -61,20 +73,20 @@ export function extractBranchMetrics(
   // Use synchronized Topik Masalah & Pokok Masalah aggregation from Google Sheet data
   const refSummary = aggregateByKategoriAndPokok(filtered, parseNumericValue);
 
-  let totalInformasi = refSummary.byKategori.Informasi;
-  let totalPermintaan = refSummary.byKategori.Permintaan;
-  let totalPengaduan = refSummary.byKategori.Pengaduan;
-  let administrasi = refSummary.byPokokMasalah.Administrasi;
-  let iuran = refSummary.byPokokMasalah.Iuran;
-  let pelayananKesehatan = refSummary.byPokokMasalah['Pelayanan Kesehatan'];
+  let totalInformasi = Math.round(Number(refSummary.byKategori.Informasi || 0));
+  let totalPermintaan = Math.round(Number(refSummary.byKategori.Permintaan || 0));
+  let totalPengaduan = Math.round(Number(refSummary.byKategori.Pengaduan || 0));
+  let administrasi = Math.round(Number(refSummary.byPokokMasalah.Administrasi || 0));
+  let iuran = Math.round(Number(refSummary.byPokokMasalah.Iuran || 0));
+  let pelayananKesehatan = Math.round(Number(refSummary.byPokokMasalah['Pelayanan Kesehatan'] || 0));
 
   let totalSla = 0;
   let totalSlaDays = 0;
 
   if (filtered.length > 0) {
     filtered.forEach(c => {
-      totalSla += (c.slaCompliance || 0);
-      totalSlaDays += (c.avgSlaDays || 2.0);
+      totalSla += Number(c.slaCompliance || 0);
+      totalSlaDays += Number(c.avgSlaDays || 2.0);
     });
   } else {
     totalInformasi = 245;
@@ -89,7 +101,7 @@ export function extractBranchMetrics(
 
   const count = filtered.length || 1;
   const totalLayanan = totalInformasi + totalPermintaan + totalPengaduan;
-  const slaCompliance = Math.round(totalSla / count);
+  const slaCompliance = Number((totalSla / count).toFixed(2));
   const avgSlaDays = Number((totalSlaDays / count).toFixed(1));
 
   // Determine dominant Pokok Masalah
@@ -102,30 +114,100 @@ export function extractBranchMetrics(
 
   // Determine dominant Category
   let dominantCategory: 'informasi' | 'permintaan' | 'pengaduan' = 'informasi';
-  if (totalPermintaan >= totalInformasi && totalPermintaan >= totalPengaduan) {
-    dominantCategory = 'permintaan';
-  } else if (totalPengaduan >= totalInformasi && totalPengaduan >= totalPermintaan) {
+  if (totalPengaduan >= totalInformasi && totalPengaduan >= totalPermintaan) {
     dominantCategory = 'pengaduan';
+  } else if (totalPermintaan >= totalInformasi && totalPermintaan >= totalPengaduan) {
+    dominantCategory = 'permintaan';
   }
 
-  // Build top Topik Masalah list from Google Sheet reference
-  const nonZeroTopik = refSummary.topikList.filter(t => t.count > 0);
-  const topTopikList: AggregatedTopikItem[] =
-    nonZeroTopik.length > 0
-      ? nonZeroTopik.slice(0, 15)
-      : TOPIK_MASALAH_REFERENCE.slice(0, 10).map((item, idx) => ({
-          ...item,
-          count: Math.max(5, Math.round((totalLayanan || 100) / (idx + 4))),
-          percentageOfTotal: Number((100 / (idx + 4)).toFixed(1)),
-          percentageOfCategory: Number((100 / (idx + 2)).toFixed(1)),
-        }));
+  // Build top Topik Masalah lists (Pengaduan, Informasi, and Overall)
+  const nonZeroPengaduan = refSummary.topikList
+    .filter(t => t.jenisKategori === 'Pengaduan' && t.count > 0)
+    .sort((a, b) => b.count - a.count);
 
-  const top1 = topTopikList[0] || {
-    topikMasalah: 'Perubahan Data Peserta',
-    pokokMasalah: 'Administrasi',
-    jenisKategori: 'Permintaan',
-    count: administrasi || 50,
+  const nonZeroInformasi = refSummary.topikList
+    .filter(t => t.jenisKategori === 'Informasi' && t.count > 0)
+    .sort((a, b) => b.count - a.count);
+
+  const topPengaduanList: AggregatedTopikItem[] =
+    nonZeroPengaduan.length > 0
+      ? nonZeroPengaduan.slice(0, 10)
+      : TOPIK_MASALAH_REFERENCE.filter(t => t.jenisKategori === 'Pengaduan')
+          .slice(0, 6)
+          .map((item, idx) => ({
+            ...item,
+            count: Math.max(5, Math.round((totalPengaduan || 60) / (idx + 2))),
+            percentageOfTotal: Number((100 / (idx + 4)).toFixed(1)),
+            percentageOfCategory: Number((100 / (idx + 2)).toFixed(1)),
+          }));
+
+  const topInformasiList: AggregatedTopikItem[] =
+    nonZeroInformasi.length > 0
+      ? nonZeroInformasi.slice(0, 10)
+      : TOPIK_MASALAH_REFERENCE.filter(t => t.jenisKategori === 'Informasi')
+          .slice(0, 6)
+          .map((item, idx) => ({
+            ...item,
+            count: Math.max(8, Math.round((totalInformasi || 120) / (idx + 2))),
+            percentageOfTotal: Number((100 / (idx + 3)).toFixed(1)),
+            percentageOfCategory: Number((100 / (idx + 2)).toFixed(1)),
+          }));
+
+  // Combine Pengaduan & Informasi as primary focus for SMS analysis
+  const combinedPengaduanInformasi = [...nonZeroPengaduan, ...nonZeroInformasi].sort((a, b) => b.count - a.count);
+  const nonZeroAll = refSummary.topikList.filter(t => t.count > 0).sort((a, b) => b.count - a.count);
+
+  const topTopikList: AggregatedTopikItem[] =
+    combinedPengaduanInformasi.length > 0
+      ? combinedPengaduanInformasi.slice(0, 15)
+      : nonZeroAll.length > 0
+      ? nonZeroAll.slice(0, 15)
+      : [...topPengaduanList.slice(0, 5), ...topInformasiList.slice(0, 5)];
+
+  const topPeng1 = topPengaduanList[0] || {
+    topikMasalah: 'Keluhan Pelayanan Fasilitas Kesehatan',
+    pokokMasalah: 'Pelayanan Kesehatan',
+    jenisKategori: 'Pengaduan',
+    count: totalPengaduan || 35,
   };
+
+  const topInfo1 = topInformasiList[0] || {
+    topikMasalah: 'Informasi Status Kepesertaan & Tagihan Iuran',
+    pokokMasalah: 'Administrasi',
+    jenisKategori: 'Informasi',
+    count: totalInformasi || 85,
+  };
+
+  const top1 = topTopikList[0] || topPeng1;
+
+  const peng2 = topPengaduanList[1] || topPeng1;
+  const peng3 = topPengaduanList[2] || topPeng1;
+  const info2 = topInformasiList[1] || topInfo1;
+  const info3 = topInformasiList[2] || topInfo1;
+
+  const analisaPengaduanRingkas = `Tercatat ${totalPengaduan.toLocaleString('id-ID')} tiket pengaduan di ${branchName}, didominasi topik "${topPeng1.topikMasalah}" (${topPeng1.count.toLocaleString('id-ID')} tiket, pokok masalah ${topPeng1.pokokMasalah}). Fokus utama: percepatan penyelesaian keluhan dan perbaikan mutu layanan di titik kontak peserta.`;
+
+  const aksiPengaduanRingkas = [
+    `Selesaikan tiket pengaduan "${topPeng1.topikMasalah}" maksimal < 24 jam melalui jalur eskalasi prioritas (Fast-Track SLA).`,
+    `Lakukan koordinasi langsung dengan PIC Faskes/unit terkait pokok masalah ${topPeng1.pokokMasalah} untuk menyelesaikan kendala layanan di lapangan.`,
+    `Standarisasi penanganan keluhan "${peng2.topikMasalah}" agar petugas frontline dapat memberikan solusi langsung di kontak pertama.`,
+    `Aktifkan peringatan dini (early-warning SLA) pada antrean tiket "${peng3.topikMasalah}" sebelum melewati batas waktu layanan.`,
+    `Lakukan konfirmasi penyelesaian ke peserta (closed-loop feedback) untuk memastikan keluhan tuntas dan meningkatkan kepuasan peserta.`,
+    `Evaluasi mingguan akar masalah (root-cause) pengaduan berulang pada kategori ${topPeng1.pokokMasalah} bersama pimpinan unit.`,
+    `Perkuat supervisi mutu layanan di loket dan kanal pengaduan untuk menjaga Kepatuhan SLA di atas 98,00%.`
+  ];
+
+  const analisaInformasiRingkas = `Tercatat ${totalInformasi.toLocaleString('id-ID')} tiket permintaan informasi di ${branchName}, tertinggi pada topik "${topInfo1.topikMasalah}" (${topInfo1.count.toLocaleString('id-ID')} tiket, pokok masalah ${topInfo1.pokokMasalah}). Fokus utama: edukasi proaktif dan penyediaan informasi yang mudah dipahami peserta.`;
+
+  const aksiInformasiRingkas = [
+    `Sediakan panduan ringkas (infografis/QR Code) topik "${topInfo1.topikMasalah}" di area ruang tunggu dan loket layanan.`,
+    `Bekali petugas frontline dengan skrip jawaban standar 1-lembar yang ringkas, jelas, dan mudah dipahami peserta.`,
+    `Kirimkan pesan edukasi proaktif (WhatsApp/kanal digital) terkait "${info2.topikMasalah}" untuk meningkatkan pemahaman peserta.`,
+    `Perbarui daftar FAQ interaktif mengenai "${info3.topikMasalah}" (${info3.pokokMasalah}) agar peserta memperoleh informasi secara mandiri.`,
+    `Pasang petunjuk alur prosedur layanan ${topInfo1.pokokMasalah} yang jelas di titik informasi untuk mengurangi kebingungan peserta.`,
+    `Pastikan petugas melakukan konfirmasi pemahaman kepada peserta di akhir sesi pemberian informasi untuk menjamin kepuasan layanan.`,
+    `Lakukan sosialisasi terarah kepada peserta dan badan usaha terkait ketentuan terbaru pada pokok masalah ${topInfo1.pokokMasalah}.`
+  ];
 
   return {
     branchName,
@@ -142,10 +224,22 @@ export function extractBranchMetrics(
     dominantPokokMasalah,
     dominantCategory,
     topTopikList,
+    topPengaduanList,
+    topInformasiList,
     dominantTopikMasalah: top1.topikMasalah,
     dominantTopikPokok: top1.pokokMasalah,
     dominantTopikKategori: top1.jenisKategori,
-    dominantTopikCount: top1.count,
+    dominantTopikCount: Math.round(Number(top1.count || 0)),
+    dominantPengaduanTopik: topPeng1.topikMasalah,
+    dominantPengaduanPokok: topPeng1.pokokMasalah,
+    dominantPengaduanCount: Math.round(Number(topPeng1.count || 0)),
+    dominantInformasiTopik: topInfo1.topikMasalah,
+    dominantInformasiPokok: topInfo1.pokokMasalah,
+    dominantInformasiCount: Math.round(Number(topInfo1.count || 0)),
+    analisaPengaduanRingkas,
+    aksiPengaduanRingkas,
+    analisaInformasiRingkas,
+    aksiInformasiRingkas,
     isDirectTopikMatch: refSummary.isDirectTopikMatch,
   };
 }
@@ -154,263 +248,220 @@ export function generateFallbackRecommendations(
   targetBranch: string | string[] = 'Semua',
   targetKepwil: string | string[] = 'Semua',
   cities: CityData[] = [],
-  selectedTopikFilter: string = 'Semua'
+  selectedTopikFilter: string = 'Semua',
+  kategoriFocus: 'Semua' | 'Pengaduan' | 'Informasi' = 'Semua'
 ): SmsRecommendationResponse {
   const m = extractBranchMetrics(targetBranch, targetKepwil, cities);
 
-  const healthStatus: 'Optimal' | 'Perlu Perhatian' | 'Kritis' = 
+  const healthStatus: 'Optimal' | 'Perlu Perhatian' | 'Kritis' =
     m.slaCompliance >= 92 ? 'Optimal' : m.slaCompliance >= 82 ? 'Perlu Perhatian' : 'Kritis';
-  
+
   const overallScore = Math.min(100, Math.max(50, Math.round(m.slaCompliance * 0.9 + (m.avgSlaDays <= 2 ? 8 : 4))));
 
-  // Select reference topics from Google Sheet data (filtered by selectedTopikFilter if active)
+  // Build alternating pool of Pengaduan (service quality & satisfaction) and Informasi (participant understanding & satisfaction)
+  let basePool: AggregatedTopikItem[] = [];
+  if (kategoriFocus === 'Pengaduan') {
+    basePool = m.topPengaduanList.length > 0 ? m.topPengaduanList : m.topTopikList;
+  } else if (kategoriFocus === 'Informasi') {
+    basePool = m.topInformasiList.length > 0 ? m.topInformasiList : m.topTopikList;
+  } else {
+    const maxLen = Math.max(m.topPengaduanList.length, m.topInformasiList.length);
+    for (let i = 0; i < maxLen; i++) {
+      if (m.topPengaduanList[i]) basePool.push(m.topPengaduanList[i]);
+      if (m.topInformasiList[i]) basePool.push(m.topInformasiList[i]);
+    }
+    if (basePool.length === 0) basePool = m.topTopikList;
+  }
+
   const candidateTopics =
     selectedTopikFilter && selectedTopikFilter !== 'Semua'
-      ? m.topTopikList.filter(
+      ? [...m.topPengaduanList, ...m.topInformasiList, ...m.topTopikList].filter(
           t =>
             t.topikMasalah.toLowerCase() === selectedTopikFilter.toLowerCase() ||
             t.pokokMasalah.toLowerCase() === selectedTopikFilter.toLowerCase() ||
             t.jenisKategori.toLowerCase() === selectedTopikFilter.toLowerCase()
         )
-      : m.topTopikList;
+      : basePool;
 
-  const activeTopics = candidateTopics.length > 0 ? candidateTopics : m.topTopikList;
-  const pickTopic = (idx: number): AggregatedTopikItem => {
-    if (activeTopics.length === 0) {
-      return {
-        id: `fallback-${idx}`,
-        topikMasalah: 'Perubahan Data Peserta',
-        pokokMasalah: 'Administrasi',
-        jenisKategori: 'Permintaan',
-        count: m.administrasi || 25,
-        percentageOfTotal: 25,
-        percentageOfCategory: 40,
-      };
+  const activeTopics = candidateTopics.length > 0 ? candidateTopics : basePool;
+
+  const pickPengaduanTopic = (idx: number): AggregatedTopikItem => {
+    if (selectedTopikFilter !== 'Semua' && activeTopics.length > 0) {
+      return activeTopics[idx % activeTopics.length];
     }
-    return activeTopics[idx % activeTopics.length];
+    if (kategoriFocus === 'Informasi' && m.topInformasiList.length > 0) {
+      return m.topInformasiList[idx % m.topInformasiList.length];
+    }
+    if (m.topPengaduanList.length > 0) {
+      return m.topPengaduanList[idx % m.topPengaduanList.length];
+    }
+    return activeTopics[idx % Math.max(1, activeTopics.length)];
   };
 
-  const t1 = pickTopic(0);
-  const t2 = pickTopic(1);
-  const t3 = pickTopic(2);
-  const t4 = pickTopic(3);
-  const t5 = pickTopic(4);
-  const t6 = pickTopic(5);
-  const t7 = pickTopic(6);
-  const t8 = pickTopic(7);
-  const t9 = pickTopic(8);
+  const pickInformasiTopic = (idx: number): AggregatedTopikItem => {
+    if (selectedTopikFilter !== 'Semua' && activeTopics.length > 0) {
+      return activeTopics[idx % activeTopics.length];
+    }
+    if (kategoriFocus === 'Pengaduan' && m.topPengaduanList.length > 0) {
+      return m.topPengaduanList[idx % m.topPengaduanList.length];
+    }
+    if (m.topInformasiList.length > 0) {
+      return m.topInformasiList[idx % m.topInformasiList.length];
+    }
+    return activeTopics[idx % Math.max(1, activeTopics.length)];
+  };
 
-  const pokokMasalahText = 
-    m.dominantPokokMasalah === 'iuran' 
-      ? `Iuran (${m.iuran.toLocaleString('id-ID')} tiket)`
-      : m.dominantPokokMasalah === 'pelayananKesehatan'
-      ? `Pelayanan Kesehatan (${m.pelayananKesehatan.toLocaleString('id-ID')} tiket)`
-      : `Administrasi (${m.administrasi.toLocaleString('id-ID')} tiket)`;
+  const p1 = pickPengaduanTopic(0);
+  const i1 = pickInformasiTopic(0);
+  const p2 = pickPengaduanTopic(1);
+  const i2 = pickInformasiTopic(1);
+  const p3 = pickPengaduanTopic(2);
+  const i3 = pickInformasiTopic(2);
+
+  const kesimpulanPendek = `Fokus Jangka Pendek (1 - 3 Bulan) di ${m.branchName} adalah percepatan penyelesaian langsung pengaduan utama "${p1.topikMasalah}" (${p1.pokokMasalah}) di titik layanan serta penyediaan panduan informasi praktis untuk topik "${i1.topikMasalah}" dan "${i2.topikMasalah}" agar peserta langsung memahami prosedur tanpa kunjungan berulang.`;
+
+  const aksiUtamaPendek: string[] = [
+    `Menunjuk petugas PIC khusus (Fast-Track) untuk menyelesaikan pengaduan "${p1.topikMasalah}" pada hari yang sama.`,
+    `Menyederhanakan alur penjelasan dan verifikasi layanan pada pokok masalah ${i1.pokokMasalah} di loket maupun kanal non-tatap muka.`,
+    `Memasang QR Code panduan visual 1 halaman dan template informasi cepat untuk topik "${i1.topikMasalah}" serta "${i2.topikMasalah}".`,
+    `Melakukan konfirmasi penyelesaian (closed-loop) kepada peserta setelah keluhan ditindaklanjuti untuk memastikan kepuasan peserta.`
+  ];
+
+  const kesimpulanMenengah = `Fokus Jangka Menengah (4 - 6 Bulan) di ${m.branchName} adalah standarisasi kompetensi petugas layanan, penguatan koordinasi lintas unit dan mitra Faskes untuk mencegah berulangnya keluhan "${p2.topikMasalah}" serta "${p3.topikMasalah}", dan perluasan edukasi digital terstruktur pada topik "${i3.topikMasalah}".`;
+
+  const aksiUtamaMenengah: string[] = [
+    `Melaksanakan pelatihan dan penyamaan standar jawaban petugas terkait penanganan kasus "${p2.topikMasalah}" (${p2.pokokMasalah}).`,
+    `Menetapkan kesepakatan waktu respon cepat lintas bidang dan mitra Faskes untuk menuntaskan kendala "${p3.topikMasalah}".`,
+    `Mengaktifkan pemantauan dini (early warning) antrean tiket dan konten edukasi interaktif untuk topik "${i3.topikMasalah}".`,
+    `Melakukan evaluasi berkala bersama mitra layanan guna memperbaiki akar penyebab pengaduan dan meningkatkan mutu layanan.`
+  ];
 
   const recommendations: StrategicRecommendationItem[] = [
-    // --- JANGKA PENDEK (1 - 3 BULAN) ---
+    // --- 1. JANGKA PENDEK (1 - 3 BULAN) ---
     {
-      id: `rec-p1-${m.branchName}-${t1.id}`,
-      title: `Langkah 1 (SDM): Satgas Respon Cepat Topik "${t1.topikMasalah}"`,
-      description: `Berdasarkan sinkronisasi Google Sheet di ${m.branchName}, topik masalah "${t1.topikMasalah}" (${t1.jenisKategori} - ${t1.pokokMasalah}) mendominasi dengan ${t1.count.toLocaleString('id-ID')} tiket (${t1.percentageOfTotal}% dari total ${m.totalLayanan.toLocaleString('id-ID')} layanan). Diperlukan penugasan tim khusus frontline untuk memangkas durasi SLA dari ${m.avgSlaDays} hari.`,
+      id: `rec-p1-${m.branchName}-${p1.id}`,
+      title: `Penanganan Prioritas & Respon Cepat Pengaduan "${p1.topikMasalah}"`,
       aspect: 'people',
       aspectLabel: 'People',
       timeframe: 'pendek',
-      timeframeLabel: 'Jangka Pendek (1-3 Bulan)',
+      timeframeLabel: 'Jangka Pendek (1 - 3 Bulan)',
       impactLevel: 'Kritis',
       targetBranch: m.branchName,
-      topikMasalah: t1.topikMasalah,
-      pokokMasalah: t1.pokokMasalah,
-      jenisKategori: t1.jenisKategori,
-      topikCount: t1.count,
-      kpiTarget: `Penyelesaian ${t1.count.toLocaleString('id-ID')} Tiket "${t1.topikMasalah}" < 1.5 Hari`,
+      topikMasalah: p1.topikMasalah,
+      pokokMasalah: p1.pokokMasalah,
+      jenisKategori: p1.jenisKategori,
+      topikCount: Math.round(p1.count),
       actionSteps: [
-        `Briefing Pagi (07:45 WIB): Tetapkan target harian penguraian antrean topik "${t1.topikMasalah}" (${t1.count.toLocaleString('id-ID')} tiket pada kategori ${t1.jenisKategori}).`,
-        `Rotasi Jam Sibuk (10:00 - 14:00): Tugaskan 2 petugas verifikator khusus menangani pokok masalah ${t1.pokokMasalah} agar tidak terjadi penumpukan.`,
-        `Tunjuk 1 PIC eskalasi langsung untuk menyelesaikan kendala teknis pada topik "${t1.topikMasalah}" di hari yang sama (One-Day Service).`
+        `Tunjuk PIC khusus penanganan cepat tiket "${p1.topikMasalah}" agar diselesaikan pada hari yang sama.`,
+        `Lakukan briefing pagi petugas frontline untuk memprioritaskan tindak lanjut keluhan pada pokok masalah ${p1.pokokMasalah}.`,
+        `Hubungi peserta segera setelah pengaduan diselesaikan untuk memastikan solusi sudah diterima dengan jelas.`
       ]
     },
     {
-      id: `rec-pr1-${m.branchName}-${t2.id}`,
-      title: `Langkah 2 (Proses): SOP Fast-Track Penanganan "${t2.topikMasalah}"`,
-      description: `Menyederhanakan alur verifikasi dan tindak lanjut pada topik "${t2.topikMasalah}" (Kategori ${t2.jenisKategori} - Pokok Masalah ${t2.pokokMasalah}) yang tercatat sebanyak ${t2.count.toLocaleString('id-ID')} tiket (${t2.percentageOfTotal}%) pada data Google Sheet ${m.branchName}.`,
+      id: `rec-pr1-${m.branchName}-${i1.id}`,
+      title: `Penyederhanaan Alur & Standar Penjelasan "${i1.topikMasalah}"`,
       aspect: 'proses',
       aspectLabel: 'Proses',
       timeframe: 'pendek',
-      timeframeLabel: 'Jangka Pendek (1-3 Bulan)',
+      timeframeLabel: 'Jangka Pendek (1 - 3 Bulan)',
       impactLevel: 'Tinggi',
       targetBranch: m.branchName,
-      topikMasalah: t2.topikMasalah,
-      pokokMasalah: t2.pokokMasalah,
-      jenisKategori: t2.jenisKategori,
-      topikCount: t2.count,
-      kpiTarget: `SLA Compliance Topik "${t2.topikMasalah}" Naik dari ${m.slaCompliance}% ke > ${Math.min(99, m.slaCompliance + 6)}%`,
+      topikMasalah: i1.topikMasalah,
+      pokokMasalah: i1.pokokMasalah,
+      jenisKategori: i1.jenisKategori,
+      topikCount: Math.round(i1.count),
       actionSteps: [
-        `Terapkan jalur cepat (Fast-Track < 24 jam) khusus untuk ${t2.count.toLocaleString('id-ID')} laporan bertopik "${t2.topikMasalah}".`,
-        `Pangkas tahapan validasi berulang pada kategori ${t2.jenisKategori} (${t2.pokokMasalah}) menggunakan daftar periksa (checklist) baku.`,
-        `Lakukan evaluasi harian pukul 16:30 WIB terhadap tiket "${t2.topikMasalah}" dan "${t1.topikMasalah}" yang mendekati batas SLA.`
+        `Gunakan lembar panduan 1 halaman yang ringkas dan jelas saat menjelaskan topik "${i1.topikMasalah}" kepada peserta.`,
+        `Pangkas alur verifikasi berulang pada layanan ${i1.pokokMasalah} agar waktu layanan lebih cepat.`,
+        `Konfirmasi ulang pemahaman peserta di akhir sesi layanan agar tidak terjadi kebingungan atau kunjungan berulang.`
       ]
     },
     {
-      id: `rec-t1-${m.branchName}-${t3.id}`,
-      title: `Langkah 3 (Tools): Kanal Panduan Mandiri & Auto-Reply Topik "${t3.topikMasalah}"`,
-      description: `Mengurangi beban antrean loket untuk topik "${t3.topikMasalah}" (${t3.jenisKategori} - ${t3.pokokMasalah} sebanyak ${t3.count.toLocaleString('id-ID')} tiket) melalui penyediaan panduan mandiri QR Code dan notifikasi status otomatis di ${m.branchName}.`,
+      id: `rec-t1-${m.branchName}-${i2.id}`,
+      title: `Penyediaan Media Edukasi Mandiri & Informasi Cepat "${i2.topikMasalah}"`,
       aspect: 'tools',
       aspectLabel: 'Tools',
       timeframe: 'pendek',
-      timeframeLabel: 'Jangka Pendek (1-3 Bulan)',
+      timeframeLabel: 'Jangka Pendek (1 - 3 Bulan)',
       impactLevel: 'Tinggi',
       targetBranch: m.branchName,
-      topikMasalah: t3.topikMasalah,
-      pokokMasalah: t3.pokokMasalah,
-      jenisKategori: t3.jenisKategori,
-      topikCount: t3.count,
-      kpiTarget: `Reduksi Tiket Berulang "${t3.topikMasalah}" (${t3.count.toLocaleString('id-ID')} Tiket) Sebesar 35%`,
+      topikMasalah: i2.topikMasalah,
+      pokokMasalah: i2.pokokMasalah,
+      jenisKategori: i2.jenisKategori,
+      topikCount: Math.round(i2.count),
       actionSteps: [
-        `Pasang Standing Banner QR Code berisi panduan syarat & solusi cepat topik "${t3.topikMasalah}" di ruang tunggu ${m.branchName}.`,
-        `Aktifkan template respon cepat WhatsApp/PANDAWAsa untuk menjawab pertanyaan dan permintaan terkait "${t3.topikMasalah}".`,
-        `Sediakan Kios Cek Mandiri di area depan untuk verifikasi awal pokok masalah ${t3.pokokMasalah}.`
+        `Pasang QR Code dan infografis langkah praktis "${i2.topikMasalah}" di ruang tunggu layanan ${m.branchName}.`,
+        `Sediakan template pesan digital berisi panduan ringkas persyaratan dan alur pokok masalah ${i2.pokokMasalah}.`,
+        `Kirimkan informasi status tindak lanjut tiket secara proaktif agar peserta mendapatkan kepastian layanan.`
       ]
     },
 
-    // --- JANGKA MENENGAH (3 - 6 BULAN) ---
+    // --- 2. JANGKA MENENGAH (4 - 6 BULAN) ---
     {
-      id: `rec-p2-${m.branchName}-${t4.id}`,
-      title: `Langkah 4 (SDM): Upskilling & Sertifikasi Petugas pada Topik "${t4.topikMasalah}"`,
-      description: `Meningkatkan akurasi penyelesaian petugas ${m.branchName} dalam menangani topik masalah "${t4.topikMasalah}" (${t4.pokokMasalah} - ${t4.jenisKategori}, ${t4.count.toLocaleString('id-ID')} tiket) serta kasus "${t5.topikMasalah}" (${t5.count.toLocaleString('id-ID')} tiket).`,
+      id: `rec-p2-${m.branchName}-${p2.id}`,
+      title: `Penguatan Kompetensi Petugas dalam Penanganan "${p2.topikMasalah}"`,
       aspect: 'people',
       aspectLabel: 'People',
       timeframe: 'menengah',
-      timeframeLabel: 'Jangka Menengah (3-6 Bulan)',
-      impactLevel: 'Sedang',
-      targetBranch: m.branchName,
-      topikMasalah: t4.topikMasalah,
-      pokokMasalah: t4.pokokMasalah,
-      jenisKategori: t4.jenisKategori,
-      topikCount: t4.count,
-      kpiTarget: `Zero Error & Kepuasan Layanan Topik "${t4.topikMasalah}" > 94%`,
-      actionSteps: [
-        `Gelar Workshop Bedah Kasus 2x sebulan yang berfokus pada penyelesaian tuntas topik "${t4.topikMasalah}" (${t4.count.toLocaleString('id-ID')} tiket).`,
-        `Latih petugas frontline & back-office dalam komunikasi empatik untuk menekan eskalasi pada kategori ${t4.jenisKategori}.`,
-        `Terapkan uji kompetensi bulanan terkait regulasi terbaru pokok masalah ${t4.pokokMasalah}.`
-      ]
-    },
-    {
-      id: `rec-pr2-${m.branchName}-${t5.id}`,
-      title: `Langkah 5 (Proses): Integrasi Lintas Bidang untuk Topik "${t5.topikMasalah}"`,
-      description: `Menghilangkan hambatan koordinasi antar-unit dalam memproses topik "${t5.topikMasalah}" (${t5.jenisKategori} - ${t5.pokokMasalah}, ${t5.count.toLocaleString('id-ID')} tiket) di ${m.branchName} melalui SLA disposisi elektronik.`,
-      aspect: 'proses',
-      aspectLabel: 'Proses',
-      timeframe: 'menengah',
-      timeframeLabel: 'Jangka Menengah (3-6 Bulan)',
+      timeframeLabel: 'Jangka Menengah (4 - 6 Bulan)',
       impactLevel: 'Tinggi',
       targetBranch: m.branchName,
-      topikMasalah: t5.topikMasalah,
-      pokokMasalah: t5.pokokMasalah,
-      jenisKategori: t5.jenisKategori,
-      topikCount: t5.count,
-      kpiTarget: `Pemangkasan Waktu Koordinasi Topik "${t5.topikMasalah}" Sebesar 40%`,
+      topikMasalah: p2.topikMasalah,
+      pokokMasalah: p2.pokokMasalah,
+      jenisKategori: p2.jenisKategori,
+      topikCount: Math.round(p2.count),
       actionSteps: [
-        `Digitalisasi dokumen pendukung untuk ${t5.count.toLocaleString('id-ID')} tiket topik "${t5.topikMasalah}" agar dapat diakses lintas bidang secara real-time.`,
-        `Tetapkan batas waktu respon antarbidang maksimal 2 jam untuk kasus pokok masalah ${t5.pokokMasalah}.`,
-        `Lakukan audit mutu berkala setiap tanggal 15 terhadap penyelesaian topik "${t5.topikMasalah}" dan "${t4.topikMasalah}".`
+        `Laksanakan pelatihan praktis komunikasi empatik dan solusi cepat untuk kasus "${p2.topikMasalah}".`,
+        `Samakan standar jawaban antara petugas loket dan back-office terkait aturan ${p2.pokokMasalah} agar informasi konsisten.`,
+        `Lakukan supervisi berkala terhadap kualitas penjelasan dan ketepatan solusi yang diberikan petugas kepada peserta.`
       ]
     },
     {
-      id: `rec-t2-${m.branchName}-${t6.id}`,
-      title: `Langkah 6 (Tools): Early Warning System & Tracking Topik "${t6.topikMasalah}"`,
-      description: `Membangun sistem peringatan dini pada dashboard Google Sheet Senada untuk memantau lonjakan tiket topik "${t6.topikMasalah}" (${t6.jenisKategori} - ${t6.pokokMasalah}, ${t6.count.toLocaleString('id-ID')} tiket) di ${m.branchName}.`,
+      id: `rec-pr2-${m.branchName}-${p3.id}`,
+      title: `Penguatan Koordinasi Lintas Unit & Mitra Faskes pada "${p3.topikMasalah}"`,
+      aspect: 'proses',
+      aspectLabel: 'Proses',
+      timeframe: 'menengah',
+      timeframeLabel: 'Jangka Menengah (4 - 6 Bulan)',
+      impactLevel: 'Tinggi',
+      targetBranch: m.branchName,
+      topikMasalah: p3.topikMasalah,
+      pokokMasalah: p3.pokokMasalah,
+      jenisKategori: p3.jenisKategori,
+      topikCount: Math.round(p3.count),
+      actionSteps: [
+        `Tetapkan jalur koordinasi cepat antarbidang dan PIC mitra Faskes untuk penyelesaian tiket "${p3.topikMasalah}".`,
+        `Adakan evaluasi rutin bulanan bersama mitra layanan untuk menghilangkan kendala berulang pada ${p3.pokokMasalah}.`,
+        `Sosialisasikan setiap pembaruan prosedur layanan secara serentak kepada seluruh titik layanan peserta.`
+      ]
+    },
+    {
+      id: `rec-t2-${m.branchName}-${i3.id}`,
+      title: `Optimalisasi Kanal Edukasi Digital & Pemantauan "${i3.topikMasalah}"`,
       aspect: 'tools',
       aspectLabel: 'Tools',
       timeframe: 'menengah',
-      timeframeLabel: 'Jangka Menengah (3-6 Bulan)',
+      timeframeLabel: 'Jangka Menengah (4 - 6 Bulan)',
       impactLevel: 'Sedang',
       targetBranch: m.branchName,
-      topikMasalah: t6.topikMasalah,
-      pokokMasalah: t6.pokokMasalah,
-      jenisKategori: t6.jenisKategori,
-      topikCount: t6.count,
-      kpiTarget: `Deteksi Dini Anomaly Lonjakan Topik "${t6.topikMasalah}" < 15 Menit`,
+      topikMasalah: i3.topikMasalah,
+      pokokMasalah: i3.pokokMasalah,
+      jenisKategori: i3.jenisKategori,
+      topikCount: Math.round(i3.count),
       actionSteps: [
-        `Konfigurasi indikator peringatan otomatis apabila volume topik "${t6.topikMasalah}" (${t6.count.toLocaleString('id-ID')} tiket) melampaui ambang batas harian.`,
-        `Sinkronkan tabel referensi 147 Topik Masalah dengan laporan Google Sheet cabang setiap 15 menit.`,
-        `Integrasikan dasbor pemantauan Faskes & kepesertaan untuk menekan berulangnya masalah "${t6.topikMasalah}".`
-      ]
-    },
-
-    // --- JANGKA PANJANG (6 - 12+ BULAN) ---
-    {
-      id: `rec-p3-${m.branchName}-${t7.id}`,
-      title: `Langkah 7 (SDM): Spesialisasi Tim Ahli & KPI Berbasis Topik "${t7.topikMasalah}"`,
-      description: `Membangun budaya kerja berbasis analitik topik masalah di ${m.branchName}, dengan menjadikan penurunan kasus "${t7.topikMasalah}" (${t7.count.toLocaleString('id-ID')} tiket) dan "${t1.topikMasalah}" (${t1.count.toLocaleString('id-ID')} tiket) sebagai indikator kinerja utama staf.`,
-      aspect: 'people',
-      aspectLabel: 'People',
-      timeframe: 'panjang',
-      timeframeLabel: 'Jangka Panjang (6-12+ Bulan)',
-      impactLevel: 'Sedang',
-      targetBranch: m.branchName,
-      topikMasalah: t7.topikMasalah,
-      pokokMasalah: t7.pokokMasalah,
-      jenisKategori: t7.jenisKategori,
-      topikCount: t7.count,
-      kpiTarget: `Konsistensi SLA > 97% pada Seluruh Topik ${t7.pokokMasalah}`,
-      actionSteps: [
-        `Tetapkan KPI individu petugas berdasarkan kecepatan dan ketuntasan penyelesaian topik "${t7.topikMasalah}" serta "${t1.topikMasalah}".`,
-        `Berikan apresiasi bulanan bagi tim dengan rasio pengaduan berulang terendah pada pokok masalah ${t7.pokokMasalah}.`,
-        `Lakukan berbagi praktik terbaik (knowledge sharing) antar-KC dalam satu KEPWIL terkait solusi permanen topik "${t7.topikMasalah}".`
-      ]
-    },
-    {
-      id: `rec-pr3-${m.branchName}-${t8.id}`,
-      title: `Langkah 8 (Proses): Pencegahan Hulu (Preventive Action) Topik "${t8.topikMasalah}"`,
-      description: `Transformasi proses dari reaktif menjadi preventif untuk mengeliminasi akar penyebab munculnya topik "${t8.topikMasalah}" (${t8.jenisKategori} - ${t8.pokokMasalah}, ${t8.count.toLocaleString('id-ID')} tiket) di wilayah kerja ${m.branchName}.`,
-      aspect: 'proses',
-      aspectLabel: 'Proses',
-      timeframe: 'panjang',
-      timeframeLabel: 'Jangka Panjang (6-12+ Bulan)',
-      impactLevel: 'Kritis',
-      targetBranch: m.branchName,
-      topikMasalah: t8.topikMasalah,
-      pokokMasalah: t8.pokokMasalah,
-      jenisKategori: t8.jenisKategori,
-      topikCount: t8.count,
-      kpiTarget: `Penurunan Volume Tiket Hulu "${t8.topikMasalah}" Sebesar 50% YoY`,
-      actionSteps: [
-        `Gunakan tren historis Google Sheet untuk memprediksi dan mencegah lonjakan topik "${t8.topikMasalah}" sebelum periode puncak.`,
-        `Perbaiki proses rekonsiliasi data otomatis di hulu bersama mitra/Faskes/Badan Usaha terkait pokok masalah ${t8.pokokMasalah}.`,
-        `Standarkan audit kepatuhan preventif triwulanan sehingga peserta tidak perlu lagi mengajukan tiket "${t8.topikMasalah}".`
-      ]
-    },
-    {
-      id: `rec-t3-${m.branchName}-${t9.id}`,
-      title: `Langkah 9 (Tools): Otomatisasi AI Senada untuk Penyelesaian Mandiri "${t9.topikMasalah}"`,
-      description: `Mengimplementasikan asisten pintar berbasis pengetahuan 147 Topik Masalah yang mampu memproses langsung topik "${t9.topikMasalah}" (${t9.jenisKategori} - ${t9.pokokMasalah}, ${t9.count.toLocaleString('id-ID')} tiket) dan "${t1.topikMasalah}" (${t1.count.toLocaleString('id-ID')} tiket) secara end-to-end.`,
-      aspect: 'tools',
-      aspectLabel: 'Tools',
-      timeframe: 'panjang',
-      timeframeLabel: 'Jangka Panjang (6-12+ Bulan)',
-      impactLevel: 'Kritis',
-      targetBranch: m.branchName,
-      topikMasalah: t9.topikMasalah,
-      pokokMasalah: t9.pokokMasalah,
-      jenisKategori: t9.jenisKategori,
-      topikCount: t9.count,
-      kpiTarget: `Otomatisasi Penyelesaian Mandiri Topik "${t9.topikMasalah}" & "${t1.topikMasalah}" > 85%`,
-      actionSteps: [
-        `Integrasikan basis pengetahuan 147 Topik Masalah BPJS Kesehatan ke sistem layanan mandiri digital di ${m.branchName}.`,
-        `Aktifkan fitur verifikasi & penyelesaian otomatis tanpa antrean loket untuk topik "${t9.topikMasalah}" dan "${t1.topikMasalah}".`,
-        `Evaluasi akurasi rekomendasi AI setiap bulan berdasarkan umpan balik data Google Sheet terbaru.`
+        `Aktifkan pengingat otomatis pada sistem pemantauan untuk mencegah keterlambatan tindak lanjut tiket "${i3.topikMasalah}".`,
+        `Publikasikan konten edukasi visual dan tanya-jawab ringkas mengenai "${i3.topikMasalah}" melalui kanal informasi resmi.`,
+        `Kumpulkan umpan balik pemahaman peserta seusai layanan sebagai dasar penyempurnaan materi informasi.`
       ]
     }
   ];
 
-  const top3SummaryText = activeTopics
-    .slice(0, 3)
-    .map((t, i) => `#${i + 1} ${t.topikMasalah} (${t.count.toLocaleString('id-ID')} tiket - ${t.jenisKategori}/${t.pokokMasalah})`)
-    .join(', ');
-
   return {
-    summary: `Berdasarkan data sinkronisasi Google Sheet untuk ${m.branchName} (${m.totalLayanan.toLocaleString('id-ID')} total tiket, SLA Compliance: ${m.slaCompliance}%, Rerata SLA: ${m.avgSlaDays} hari), rekomendasi strategis AI difokuskan langsung pada Top Topik Masalah tertinggi: ${top3SummaryText}, dengan pokok masalah dominan ${pokokMasalahText}.`,
+    summary: `${kesimpulanPendek} Selanjutnya, ${kesimpulanMenengah}`,
+    kesimpulanPendek,
+    aksiUtamaPendek,
+    kesimpulanMenengah,
+    aksiUtamaMenengah,
     kantorCabangTarget: m.branchName,
     kepwilTarget: m.kepwilName,
     overallScore,
@@ -420,4 +471,3 @@ export function generateFallbackRecommendations(
     isFallback: true,
   };
 }
-

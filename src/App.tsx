@@ -190,7 +190,7 @@ export default function App() {
   });
 
   const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts' | 'sms' | 'reporting'>('map');
-  const [isGlobalFilterExpanded, setIsGlobalFilterExpanded] = useState<boolean>(true);
+  const [isGlobalFilterExpanded, setIsGlobalFilterExpanded] = useState<boolean>(false);
   const [showCopyNotification, setShowCopyNotification] = useState(false);
   const [showCopyDialog, setShowCopyDialog] = useState<string | null>(null);
   const [isCloudConnected, setIsCloudConnected] = useState(false);
@@ -406,22 +406,39 @@ export default function App() {
 
   // Global aggregate metrics computed on the fly from current Excel / Sheet cities data
   const summaryMetrics = useMemo(() => {
-    const totalInformasi = filteredCitiesForMetrics.reduce((acc, c) => acc + parseNumericValue(c.informasi), 0);
-    const totalPermintaan = filteredCitiesForMetrics.reduce((acc, c) => acc + parseNumericValue(c.permintaan), 0);
-    const totalPengaduan = filteredCitiesForMetrics.reduce((acc, c) => acc + parseNumericValue(c.pengaduan), 0);
-    const breakdownSum = totalInformasi + totalPermintaan + totalPengaduan;
-    
-    // Total tiket is the sum of total in all mapped cities
-    const totalTiket = filteredCitiesForMetrics.reduce((acc, c) => {
-      const cityTotal = parseNumericValue(c.total) > 0 ? parseNumericValue(c.total) : (parseNumericValue(c.informasi) + parseNumericValue(c.permintaan) + parseNumericValue(c.pengaduan));
-      return acc + cityTotal;
-    }, 0);
+    let totalInformasi = 0;
+    let totalPermintaan = 0;
+    let totalPengaduan = 0;
+    let totalTiket = 0;
 
+    filteredCitiesForMetrics.forEach(c => {
+      let infoVal = parseNumericValue(c.informasi);
+      let permVal = parseNumericValue(c.permintaan);
+      let pengVal = parseNumericValue(c.pengaduan);
+
+      if (infoVal === 0 && permVal === 0 && pengVal === 0 && c.rawRow) {
+        const extracted = extractTopikAndPokokFromRow(c.rawRow, parseNumericValue);
+        if (extracted.hasMatchedTopik) {
+          infoVal = extracted.byKategori.Informasi;
+          permVal = extracted.byKategori.Permintaan;
+          pengVal = extracted.byKategori.Pengaduan;
+        }
+      }
+
+      totalInformasi += Math.round(Number(infoVal));
+      totalPermintaan += Math.round(Number(permVal));
+      totalPengaduan += Math.round(Number(pengVal));
+
+      const cityTotal = parseNumericValue(c.total) > 0 ? parseNumericValue(c.total) : (infoVal + permVal + pengVal);
+      totalTiket += Math.round(Number(cityTotal));
+    });
+
+    const breakdownSum = totalInformasi + totalPermintaan + totalPengaduan;
     const finalTotalTiket = Math.max(totalTiket, breakdownSum);
 
-    const pctInformasi = finalTotalTiket > 0 ? ((totalInformasi / finalTotalTiket) * 100).toFixed(1) : '0';
-    const pctPermintaan = finalTotalTiket > 0 ? ((totalPermintaan / finalTotalTiket) * 100).toFixed(1) : '0';
-    const pctPengaduan = finalTotalTiket > 0 ? ((totalPengaduan / finalTotalTiket) * 100).toFixed(1) : '0';
+    const pctInformasi = finalTotalTiket > 0 ? Math.round((totalInformasi / finalTotalTiket) * 100) : 0;
+    const pctPermintaan = finalTotalTiket > 0 ? Math.round((totalPermintaan / finalTotalTiket) * 100) : 0;
+    const pctPengaduan = finalTotalTiket > 0 ? Math.round((totalPengaduan / finalTotalTiket) * 100) : 0;
 
     return {
       totalTiket: finalTotalTiket,
@@ -719,7 +736,14 @@ export default function App() {
           let infoVal = matchedInfo && row[matchedInfo] !== undefined ? parseNumericValue(row[matchedInfo]) : 0;
           let permVal = matchedPermintaan && row[matchedPermintaan] !== undefined ? parseNumericValue(row[matchedPermintaan]) : 0;
           let pengVal = matchedPengaduan && row[matchedPengaduan] !== undefined ? parseNumericValue(row[matchedPengaduan]) : 0;
-          const slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
+          let slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
+          if (slaVal > 0 && slaVal <= 1) {
+            slaVal = Number((slaVal * 100).toFixed(2));
+          } else if (slaVal > 100 && slaVal <= 10000) {
+            slaVal = Number((slaVal / 100).toFixed(2));
+          } else {
+            slaVal = Number(slaVal.toFixed(2));
+          }
 
           const topikSync = extractTopikAndPokokFromRow(row, parseNumericValue);
           if (topikSync.hasMatchedTopik && infoVal === 0 && permVal === 0 && pengVal === 0) {
@@ -748,7 +772,7 @@ export default function App() {
             pengaduan: pengVal,
             total,
             avgSlaDays: 2.4,
-            slaCompliance: Math.min(100, Math.max(0, slaVal)),
+            slaCompliance: Number(Math.min(100, Math.max(0, slaVal)).toFixed(2)),
             rawRow: row,
             ...(topikSync.hasMatchedTopik ? {
               pokokMasalahBreakdown: topikSync.byKategoriAndPokok,
@@ -895,16 +919,16 @@ export default function App() {
               >
                 <button
                   onClick={() => setActiveMainTab(tabKey as any)}
-                  className="flex items-center space-x-2 text-left flex-1 cursor-pointer py-0.5"
+                  className="flex items-center space-x-2.5 text-left flex-1 cursor-pointer py-1"
                 >
                   {isSms ? (
-                    <Sparkles className={`w-4 h-4 shrink-0 ${isActive ? 'text-indigo-400' : 'text-slate-500'}`} />
+                    <Sparkles className={`w-5 h-5 shrink-0 ${isActive ? 'text-indigo-400' : 'text-slate-500'}`} />
                   ) : isReporting ? (
-                    <Table2 className={`w-4 h-4 shrink-0 ${isActive ? 'text-emerald-400' : 'text-slate-500'}`} />
+                    <Table2 className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-400' : 'text-slate-500'}`} />
                   ) : (
-                    <div className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
+                    <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isActive ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
                   )}
-                  <span className="text-sm font-medium truncate">{label}</span>
+                  <span className="text-sm sm:text-base font-bold truncate">{label}</span>
                 </button>
 
                 <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-0.5 transition-opacity">
@@ -995,7 +1019,7 @@ export default function App() {
         {/* HEADER */}
         <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <h2 className="text-lg font-bold text-slate-800">
+            <h2 className="text-xl sm:text-2xl font-black text-slate-800">
               {activeMainTab === 'map' ? 'PETA LAYANAN SENADA' :
                activeMainTab === 'referensi' ? 'Pengaturan Referensi Filter' :
                activeMainTab === 'tickets' ? 'Antrean Laporan & SLA Tindaklanjut' :
@@ -1005,12 +1029,12 @@ export default function App() {
                'Visualisasi Grafik Kustom Dinamis'}
             </h2>
             <span className="hidden sm:inline-block text-slate-300">|</span>
-            <span className="hidden sm:inline-block text-xs text-slate-400">WIB / WITA / WIT</span>
+            <span className="hidden sm:inline-block text-xs sm:text-sm font-semibold text-slate-500">WIB / WITA / WIT</span>
           </div>
           
           <div className="flex items-center space-x-2.5">
             {syncStatusToast && (
-              <span className="text-[11px] bg-slate-800 text-white px-3 py-1 rounded-xl shadow-sm font-medium animate-fade-in hidden xl:inline-block">
+              <span className="text-xs bg-slate-800 text-white px-3.5 py-1.5 rounded-xl shadow-sm font-bold animate-fade-in hidden xl:inline-block">
                 {syncStatusToast}
               </span>
             )}
@@ -1039,15 +1063,15 @@ export default function App() {
             </button>
 
               {/* AUTO SYNC GOOGLE SHEET CONTROL GROUP */}
-            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 p-1 rounded-xl shadow-3xs">
-              <div className="flex items-center gap-1 pl-1.5 pr-0.5">
-                <Clock className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                <span className="text-[11px] text-slate-500 font-bold hidden md:inline">Auto Sync:</span>
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-1.5 rounded-xl shadow-3xs">
+              <div className="flex items-center gap-1.5 pl-1.5 pr-0.5">
+                <Clock className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span className="text-xs sm:text-sm text-slate-600 font-bold hidden md:inline">Auto Sync:</span>
                 <select
                   value={syncInterval}
                   onChange={(e) => setSyncInterval(e.target.value as any)}
                   disabled={!isAdmin}
-                  className="bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-3xs disabled:opacity-60"
+                  className="bg-white border border-slate-200 rounded-lg text-xs sm:text-sm font-bold text-slate-800 px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-3xs disabled:opacity-60"
                   id="auto-sync-interval-select"
                   title={isAdmin ? "Pilih Waktu Auto Sync dengan Google Sheet" : "Login Admin untuk mengubah waktu auto sync"}
                 >
@@ -1064,21 +1088,21 @@ export default function App() {
                 <button
                   onClick={() => handleExecuteSync()}
                   disabled={isRefreshing}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-50 cursor-pointer shadow-3xs"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-50 cursor-pointer shadow-3xs"
                   id="simulate-data-refresh-button"
                   title={lastSyncedAt ? `Terakhir sinkronisasi: ${lastSyncedAt}` : 'Klik untuk Sinkronisasi Manual Google Sheet'}
                 >
-                  <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
                   <span>{isRefreshing ? 'Sinkronisasi...' : 'Sync Sekarang'}</span>
                 </button>
               ) : (
                 <button
                   onClick={() => setIsLoginModalOpen(true)}
-                  className="bg-slate-200 hover:bg-slate-300 text-slate-600 px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-3xs"
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer shadow-3xs"
                   id="simulate-data-refresh-button"
                   title="Login Admin untuk Sinkronisasi Data"
                 >
-                  <Lock className="h-3.5 w-3.5 text-slate-500" />
+                  <Lock className="h-4 w-4 text-slate-500" />
                   <span>Sync (Admin)</span>
                 </button>
               )}
@@ -1091,29 +1115,29 @@ export default function App() {
           
           {/* ACTIVE FILTER INDICATOR BANNER */}
           {activeMainTab !== 'reporting' && (parseFilterValueList(selectedBulan).length > 0 || parseFilterValueList(selectedKepwil).length > 0 || parseFilterValueList(selectedKantorCabang).length > 0) && (
-            <div className="bg-indigo-50/90 border border-indigo-200 rounded-2xl p-3 px-4 flex flex-wrap items-center justify-between gap-3 text-xs animate-fadeIn shadow-3xs">
-              <div className="flex items-center gap-2 flex-wrap">
+            <div className="bg-indigo-50/90 border border-indigo-200 rounded-2xl p-3.5 px-4 flex flex-wrap items-center justify-between gap-3 text-sm animate-fadeIn shadow-3xs">
+              <div className="flex items-center gap-2.5 flex-wrap">
                 <span className="font-extrabold text-indigo-950 flex items-center gap-1.5">
                   <Filter className="w-4 h-4 text-indigo-600 shrink-0" />
                   Filter Data Aktif:
                 </span>
                 {parseFilterValueList(selectedBulan).length > 0 && (
-                  <span className="bg-white text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 shadow-3xs flex items-center gap-1">
+                  <span className="bg-white text-indigo-800 font-bold px-3 py-1 rounded-lg border border-indigo-200 shadow-3xs flex items-center gap-1">
                     📅 Bulan: <strong>{parseFilterValueList(selectedBulan).join(', ')}</strong>
                   </span>
                 )}
                 {parseFilterValueList(selectedKepwil).length > 0 && (
-                  <span className="bg-white text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 shadow-3xs flex items-center gap-1">
+                  <span className="bg-white text-emerald-800 font-bold px-3 py-1 rounded-lg border border-emerald-200 shadow-3xs flex items-center gap-1">
                     🏛️ KEPWIL: <strong>{parseFilterValueList(selectedKepwil).join(', ')}</strong>
                   </span>
                 )}
                 {parseFilterValueList(selectedKantorCabang).length > 0 && (
-                  <span className="bg-white text-blue-800 font-bold px-2.5 py-1 rounded-lg border border-blue-200 shadow-3xs flex items-center gap-1">
+                  <span className="bg-white text-blue-800 font-bold px-3 py-1 rounded-lg border border-blue-200 shadow-3xs flex items-center gap-1">
                     🏢 KC: <strong>{parseFilterValueList(selectedKantorCabang).join(', ')}</strong>
                   </span>
                 )}
-                <span className="text-slate-500 font-medium ml-1">
-                  ({filteredCitiesForMetrics.length} Baris Data Terpilih)
+                <span className="text-slate-600 font-semibold ml-1 tabular-nums">
+                  ({Number(filteredCitiesForMetrics.length).toLocaleString('id-ID')} Baris Data Terpilih)
                 </span>
               </div>
               <button
@@ -1123,7 +1147,7 @@ export default function App() {
                   setSelectedKepwil('Semua');
                   setSelectedKantorCabang('Semua');
                 }}
-                className="text-xs text-rose-600 hover:text-rose-800 font-bold underline cursor-pointer"
+                className="text-sm text-rose-600 hover:text-rose-800 font-bold underline cursor-pointer"
                 id="reset-top-banner-filter-btn"
               >
                 Reset Filter
@@ -1133,35 +1157,35 @@ export default function App() {
 
           {/* GLOBAL FILTER BAR FOR OTHER PAGES (ANALYTICS, TICKETS, CUSTOM CHARTS) */}
           {activeMainTab !== 'map' && activeMainTab !== 'referensi' && activeMainTab !== 'reporting' && (
-            <div className="bg-white border border-slate-200 rounded-2xl p-3.5 sm:p-4 shadow-xs space-y-3 animate-fadeIn transition-all">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3.5 animate-fadeIn transition-all">
               <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex items-center gap-3 min-w-0">
                   <button
                     type="button"
                     onClick={() => setIsGlobalFilterExpanded(!isGlobalFilterExpanded)}
-                    className="w-8 h-8 rounded-xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 flex items-center justify-center text-indigo-700 cursor-pointer transition-colors shrink-0"
+                    className="w-10 h-10 rounded-xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 flex items-center justify-center text-indigo-700 cursor-pointer transition-colors shrink-0"
                     title={isGlobalFilterExpanded ? "Sembunyikan Filter" : "Buka Filter"}
                     id="global-filter-icon-toggle-btn"
                   >
-                    <Filter className="w-4 h-4" />
+                    <Filter className="w-5 h-5" />
                   </button>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="text-xs font-black text-slate-800">Filter Menu Halaman</h4>
+                      <h4 className="text-base sm:text-lg font-black text-slate-800">Filter Menu Halaman</h4>
                       {/* Active filter summary chips when collapsed or expanded */}
-                      <div className="hidden sm:flex items-center gap-1.5 overflow-x-auto text-[10px]">
-                        <span className="bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md font-semibold text-indigo-800">
+                      <div className="hidden sm:flex items-center gap-1.5 overflow-x-auto text-xs">
+                        <span className="bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-md font-semibold text-indigo-800">
                           Bulan: <strong>{parseFilterValueList(selectedBulan).length > 0 ? parseFilterValueList(selectedBulan).join(', ') : 'Semua'}</strong>
                         </span>
-                        <span className="bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-semibold text-emerald-800 truncate max-w-[130px]">
+                        <span className="bg-emerald-50 border border-emerald-100 px-2.5 py-0.5 rounded-md font-semibold text-emerald-800 truncate max-w-[150px]">
                           KEPWIL: <strong>{parseFilterValueList(selectedKepwil).length > 0 ? parseFilterValueList(selectedKepwil).join(', ') : 'Semua'}</strong>
                         </span>
-                        <span className="bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md font-semibold text-blue-800 truncate max-w-[150px]">
+                        <span className="bg-blue-50 border border-blue-100 px-2.5 py-0.5 rounded-md font-semibold text-blue-800 truncate max-w-[170px]">
                           KC: <strong>{parseFilterValueList(selectedKantorCabang).length > 0 ? parseFilterValueList(selectedKantorCabang).join(', ') : 'Semua'}</strong>
                         </span>
                       </div>
                     </div>
-                    <p className="text-[10px] text-slate-500">
+                    <p className="text-xs sm:text-sm text-slate-600 font-medium mt-0.5">
                       {isGlobalFilterExpanded ? "Saring data analitik, laporan, dan visualisasi." : "Klik 'Buka Filter' untuk mengubah kriteria penyaringan."}
                     </p>
                   </div>
@@ -1176,9 +1200,9 @@ export default function App() {
                         setSelectedKepwil('Semua');
                         setSelectedKantorCabang('Semua');
                       }}
-                      className="text-xs text-rose-600 hover:text-rose-800 font-bold flex items-center gap-1 cursor-pointer bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200"
+                      className="text-xs sm:text-sm text-rose-600 hover:text-rose-800 font-bold flex items-center gap-1.5 cursor-pointer bg-rose-50 px-3 py-1.5 rounded-lg border border-rose-200"
                     >
-                      <RotateCcw className="w-3 h-3" />
+                      <RotateCcw className="w-3.5 h-3.5" />
                       <span className="hidden md:inline">Reset</span>
                     </button>
                   )}
@@ -1186,7 +1210,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setIsGlobalFilterExpanded(!isGlobalFilterExpanded)}
-                    className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border transition-all cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300 shadow-2xs"
+                    className="flex items-center gap-1.5 text-xs sm:text-sm font-bold px-3.5 py-2 rounded-xl border transition-all cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300 shadow-2xs"
                     id="toggle-global-filter-btn"
                   >
                     <span>{isGlobalFilterExpanded ? 'Sembunyikan' : 'Buka Filter'}</span>
@@ -1197,41 +1221,41 @@ export default function App() {
 
               {/* COLLAPSIBLE CONTROLS */}
               {isGlobalFilterExpanded && (
-                <div className="pt-3 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-3 animate-fadeIn">
+                <div className="pt-3 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-3.5 animate-fadeIn">
                   <SearchableFilterSelect
                     id="global-filter-bulan"
                     label="1. Filter Periode Bulan"
-                    icon={<Calendar className="w-3.5 h-3.5 text-indigo-600" />}
+                    icon={<Calendar className="w-4 h-4 text-indigo-600" />}
                     value={selectedBulan}
                     onChange={setSelectedBulan}
                     options={availableBulanList}
-                    allLabel={`Semua Bulan (${availableBulanList.length})`}
+                    allLabel={`Semua Bulan (${Number(availableBulanList.length).toLocaleString('id-ID')})`}
                     colorScheme="indigo"
                     searchPlaceholder="Cari bulan..."
                   />
                   <SearchableFilterSelect
                     id="global-filter-kepwil"
                     label="2. Filter KEPWIL"
-                    icon={<Landmark className="w-3.5 h-3.5 text-emerald-600" />}
+                    icon={<Landmark className="w-4 h-4 text-emerald-600" />}
                     value={selectedKepwil}
                     onChange={(val) => {
                       setSelectedKepwil(val);
                       setSelectedKantorCabang('Semua');
                     }}
                     options={availableKepwilList}
-                    allLabel={`Semua Wilayah (${availableKepwilList.length})`}
+                    allLabel={`Semua Wilayah (${Number(availableKepwilList.length).toLocaleString('id-ID')})`}
                     colorScheme="emerald"
                     searchPlaceholder="Cari wilayah..."
                   />
                   <SearchableFilterSelect
                     id="global-filter-kc"
                     label="3. Filter Kantor Cabang (KC)"
-                    icon={<Building2 className="w-3.5 h-3.5 text-blue-600" />}
+                    icon={<Building2 className="w-4 h-4 text-blue-600" />}
                     value={selectedKantorCabang}
                     onChange={setSelectedKantorCabang}
                     groupedOptions={groupedKantorCabang}
                     options={availableKantorCabangList}
-                    allLabel={`Semua Kantor Cabang (${availableKantorCabangList.length})`}
+                    allLabel={`Semua Kantor Cabang (${Number(availableKantorCabangList.length).toLocaleString('id-ID')})`}
                     colorScheme="blue"
                     searchPlaceholder="Cari Kantor Cabang..."
                   />
@@ -1245,57 +1269,57 @@ export default function App() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
               
               {/* 1. TOTAL TIKET */}
-              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
-                <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-                  <FileSpreadsheet className="h-6 w-6" />
+              <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
+                <div className="p-3.5 bg-blue-50 text-blue-600 rounded-xl shrink-0">
+                  <FileSpreadsheet className="h-7 w-7" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Total Tiket</span>
-                  <div className="flex items-baseline justify-between mt-0.5">
-                    <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalTiket.toLocaleString('id-ID')}</h4>
-                    <span className="text-blue-700 text-sm font-extrabold bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 shadow-3xs">100%</span>
+                  <span className="text-xs sm:text-sm text-slate-600 uppercase tracking-wider block font-extrabold truncate">Total Tiket</span>
+                  <div className="flex items-baseline justify-between mt-1 gap-2">
+                    <h4 className="text-2xl sm:text-3xl font-black text-slate-900 tabular-nums">{Number(summaryMetrics.totalTiket).toLocaleString('id-ID')}</h4>
+                    <span className="text-blue-700 text-xs sm:text-sm font-extrabold bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 shadow-3xs">Tiket</span>
                   </div>
                 </div>
               </div>
 
               {/* 2. LAYANAN INFORMASI */}
-              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
-                <div className="p-3 bg-sky-50 text-sky-600 rounded-xl">
-                  <HelpCircle className="h-6 w-6" />
+              <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
+                <div className="p-3.5 bg-sky-50 text-sky-600 rounded-xl shrink-0">
+                  <HelpCircle className="h-7 w-7" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Informasi</span>
-                  <div className="flex items-baseline justify-between mt-0.5">
-                    <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalInformasi.toLocaleString('id-ID')}</h4>
-                    <span className="text-sky-700 text-sm font-extrabold bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200 shadow-3xs">{summaryMetrics.pctInformasi}%</span>
+                  <span className="text-xs sm:text-sm text-slate-600 uppercase tracking-wider block font-extrabold truncate">Layanan Informasi</span>
+                  <div className="flex items-baseline justify-between mt-1 gap-2">
+                    <h4 className="text-2xl sm:text-3xl font-black text-slate-900 tabular-nums">{Number(summaryMetrics.totalInformasi).toLocaleString('id-ID')}</h4>
+                    <span className="text-sky-700 text-xs sm:text-sm font-extrabold bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200 shadow-3xs">Tiket</span>
                   </div>
                 </div>
               </div>
 
               {/* 3. LAYANAN PERMINTAAN */}
-              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
-                <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
-                  <FileText className="h-6 w-6" />
+              <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
+                <div className="p-3.5 bg-amber-50 text-amber-600 rounded-xl shrink-0">
+                  <FileText className="h-7 w-7" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Permintaan</span>
-                  <div className="flex items-baseline justify-between mt-0.5">
-                    <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPermintaan.toLocaleString('id-ID')}</h4>
-                    <span className="text-amber-700 text-sm font-extrabold bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 shadow-3xs">{summaryMetrics.pctPermintaan}%</span>
+                  <span className="text-xs sm:text-sm text-slate-600 uppercase tracking-wider block font-extrabold truncate">Layanan Permintaan</span>
+                  <div className="flex items-baseline justify-between mt-1 gap-2">
+                    <h4 className="text-2xl sm:text-3xl font-black text-slate-900 tabular-nums">{Number(summaryMetrics.totalPermintaan).toLocaleString('id-ID')}</h4>
+                    <span className="text-amber-700 text-xs sm:text-sm font-extrabold bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 shadow-3xs">Tiket</span>
                   </div>
                 </div>
               </div>
 
               {/* 4. LAYANAN PENGADUAN */}
-              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
-                <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
-                  <AlertCircle className="h-6 w-6" />
+              <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-4 hover:shadow transition-shadow">
+                <div className="p-3.5 bg-rose-50 text-rose-600 rounded-xl shrink-0">
+                  <AlertCircle className="h-7 w-7" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold truncate">Layanan Pengaduan</span>
-                  <div className="flex items-baseline justify-between mt-0.5">
-                    <h4 className="text-2xl font-black text-slate-900">{summaryMetrics.totalPengaduan.toLocaleString('id-ID')}</h4>
-                    <span className="text-rose-700 text-sm font-extrabold bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 shadow-3xs">{summaryMetrics.pctPengaduan}%</span>
+                  <span className="text-xs sm:text-sm text-slate-600 uppercase tracking-wider block font-extrabold truncate">Layanan Pengaduan</span>
+                  <div className="flex items-baseline justify-between mt-1 gap-2">
+                    <h4 className="text-2xl sm:text-3xl font-black text-slate-900 tabular-nums">{Number(summaryMetrics.totalPengaduan).toLocaleString('id-ID')}</h4>
+                    <span className="text-rose-700 text-xs sm:text-sm font-extrabold bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200 shadow-3xs">Tiket</span>
                   </div>
                 </div>
               </div>

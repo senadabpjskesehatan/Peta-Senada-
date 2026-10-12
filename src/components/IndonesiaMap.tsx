@@ -525,9 +525,9 @@ export default function IndonesiaMap({
       if (!cleanKC) return;
       const cleanKey = cleanKC.toLowerCase().trim();
 
-      const infoVal = parseNumericValue(c.informasi);
-      const permVal = parseNumericValue(c.permintaan);
-      const pengVal = parseNumericValue(c.pengaduan);
+      let infoVal = parseNumericValue(c.informasi);
+      let permVal = parseNumericValue(c.permintaan);
+      let pengVal = parseNumericValue(c.pengaduan);
       const slaVal = parseNumericValue(c.slaCompliance) || 90;
 
       // Always resolve accurate geographic coordinates for Indonesian cities & KC
@@ -567,14 +567,19 @@ export default function IndonesiaMap({
           for (const [tk, tv] of Object.entries(extracted.topikCounts)) {
             map[cleanKey].topikBreakdown[tk] = (map[cleanKey].topikBreakdown[tk] || 0) + tv;
           }
+          if (infoVal === 0 && permVal === 0 && pengVal === 0) {
+            infoVal = extracted.byKategori.Informasi;
+            permVal = extracted.byKategori.Permintaan;
+            pengVal = extracted.byKategori.Pengaduan;
+          }
         }
       }
 
       // Rumus SUM per kategori layanan
-      map[cleanKey].informasi += infoVal;
-      map[cleanKey].permintaan += permVal;
-      map[cleanKey].pengaduan += pengVal;
-      map[cleanKey].total += parseNumericValue(c.total) > 0 ? parseNumericValue(c.total) : (infoVal + permVal + pengVal);
+      map[cleanKey].informasi += Math.round(Number(infoVal));
+      map[cleanKey].permintaan += Math.round(Number(permVal));
+      map[cleanKey].pengaduan += Math.round(Number(pengVal));
+      map[cleanKey].total += Math.round(Number(parseNumericValue(c.total) > 0 ? parseNumericValue(c.total) : (infoVal + permVal + pengVal)));
       map[cleanKey].slaSum += slaVal;
       map[cleanKey].count += 1;
     });
@@ -582,8 +587,8 @@ export default function IndonesiaMap({
     return Object.entries(map).map(([key, item], index) => {
       const calculatedTotal = item.informasi + item.permintaan + item.pengaduan;
       const total = item.total > 0 ? item.total : calculatedTotal;
-      const avgSla = item.count > 0 ? Math.round(item.slaSum / item.count) : 90;
-      const slaCompliance = Math.min(100, Math.max(0, avgSla));
+      const avgSla = item.count > 0 ? Number((item.slaSum / item.count).toFixed(2)) : 90;
+      const slaCompliance = Number(Math.min(100, Math.max(0, avgSla)).toFixed(2));
 
       return {
         id: item.id || `kc_uniq_${index}_${key.replace(/[^a-z0-9]/gi, '_')}`,
@@ -727,7 +732,7 @@ export default function IndonesiaMap({
       const totalPerm = uniqueCities.reduce((acc, c) => acc + c.permintaan, 0);
       const totalPeng = uniqueCities.reduce((acc, c) => acc + c.pengaduan, 0);
       const totalAll = uniqueCities.reduce((acc, c) => acc + c.total, 0);
-      const avgSla = Math.round(uniqueCities.reduce((acc, c) => acc + c.slaCompliance, 0) / uniqueCities.length);
+      const avgSla = Number((uniqueCities.reduce((acc, c) => acc + c.slaCompliance, 0) / uniqueCities.length).toFixed(2));
       const kcNames = parseFilterValueList(selectedKantorCabang);
       const kwNames = parseFilterValueList(selectedKepwil);
       const displayName = kcNames.length > 0 ? kcNames.join(', ') : kwNames.join(', ');
@@ -878,10 +883,10 @@ export default function IndonesiaMap({
 
       // Clean Tooltip for Region Name (Keterangan nama daerah)
       marker.bindTooltip(`
-        <div class="px-2 py-1 font-sans text-xs font-bold text-slate-800 flex items-center gap-1.5">
-          <span class="w-2.5 h-2.5 rounded-full shadow-sm" style="background-color: ${dotColor}"></span>
+        <div class="px-2.5 py-1.5 font-sans text-sm font-extrabold text-slate-800 flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full shadow-sm" style="background-color: ${dotColor}"></span>
           <span>KC ${city.name}</span>
-          <span class="text-[10px] px-1.5 py-0.2 bg-slate-100 rounded text-slate-600 font-mono font-bold">${city.total}</span>
+          <span class="text-xs px-2 py-0.5 bg-slate-100 rounded-md text-slate-800 tabular-nums font-black">${Math.round(Number(city.total)).toLocaleString('id-ID')}</span>
         </div>
       `, {
         direction: 'top',
@@ -890,21 +895,21 @@ export default function IndonesiaMap({
       });
 
       const popupContent = `
-        <div class="p-1 min-w-[210px] font-sans">
-          <div class="font-extrabold text-slate-800 text-xs flex items-center justify-between gap-2 border-b border-slate-200 pb-1.5 mb-2">
-            <span class="text-sm">KC ${city.name}</span>
-            <span class="text-[10px] px-2 py-0.5 rounded-full text-white font-bold" style="background-color: ${dotColor}">
-              ${city.total} Laporan
+        <div class="p-1.5 min-w-[240px] font-sans">
+          <div class="font-extrabold text-slate-800 text-sm flex items-center justify-between gap-2 border-b border-slate-200 pb-2 mb-2.5">
+            <span class="text-base font-black">KC ${city.name}</span>
+            <span class="text-xs px-2.5 py-1 rounded-full text-white font-black tabular-nums" style="background-color: ${dotColor}">
+              ${Math.round(Number(city.total)).toLocaleString('id-ID')} Tiket
             </span>
           </div>
-          <div class="grid grid-cols-3 gap-1 text-center text-[11px] mb-2">
-            <div class="bg-indigo-50 p-1 rounded border border-indigo-100"><div class="text-[9px] text-indigo-600 font-bold">Info</div><div class="font-extrabold text-slate-800">${city.informasi}</div></div>
-            <div class="bg-teal-50 p-1 rounded border border-teal-100"><div class="text-[9px] text-teal-600 font-bold">Minta</div><div class="font-extrabold text-slate-800">${city.permintaan}</div></div>
-            <div class="bg-rose-50 p-1 rounded border border-rose-100"><div class="text-[9px] text-rose-600 font-bold">Aduan</div><div class="font-extrabold text-slate-800">${city.pengaduan}</div></div>
+          <div class="grid grid-cols-3 gap-1.5 text-center text-xs mb-2.5">
+            <div class="bg-indigo-50 p-1.5 rounded-lg border border-indigo-100"><div class="text-xs text-indigo-700 font-bold">Informasi</div><div class="font-black text-slate-900 text-sm tabular-nums">${Math.round(Number(city.informasi)).toLocaleString('id-ID')}</div></div>
+            <div class="bg-teal-50 p-1.5 rounded-lg border border-teal-100"><div class="text-xs text-teal-700 font-bold">Permintaan</div><div class="font-black text-slate-900 text-sm tabular-nums">${Math.round(Number(city.permintaan)).toLocaleString('id-ID')}</div></div>
+            <div class="bg-rose-50 p-1.5 rounded-lg border border-rose-100"><div class="text-xs text-rose-700 font-bold">Pengaduan</div><div class="font-black text-slate-900 text-sm tabular-nums">${Math.round(Number(city.pengaduan)).toLocaleString('id-ID')}</div></div>
           </div>
-          <div class="text-[11px] text-slate-600 flex justify-between items-center bg-slate-50 p-1.5 rounded border border-slate-200">
-            <span>SLA Terpenuhi:</span>
-            <span class="font-extrabold text-emerald-600 text-xs">${city.slaCompliance}%</span>
+          <div class="text-xs text-slate-700 font-semibold flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-200">
+            <span>Kepatuhan SLA:</span>
+            <span class="font-black text-emerald-700 text-sm tabular-nums">${Number(city.slaCompliance || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%</span>
           </div>
         </div>
       `;
@@ -1123,9 +1128,11 @@ export default function IndonesiaMap({
 
       let slaVal = matchedSla && row[matchedSla] !== undefined ? parseNumericValue(row[matchedSla]) : 90;
       if (slaVal > 0 && slaVal <= 1) {
-        slaVal = Number((slaVal * 100).toFixed(1));
+        slaVal = Number((slaVal * 100).toFixed(2));
       } else if (slaVal > 100 && slaVal <= 10000) {
-        slaVal = Number((slaVal / 100).toFixed(1));
+        slaVal = Number((slaVal / 100).toFixed(2));
+      } else {
+        slaVal = Number(slaVal.toFixed(2));
       }
       
       const calculatedTotal = infoVal + permVal + pengVal;
@@ -1605,20 +1612,20 @@ export default function IndonesiaMap({
               </button>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-sm font-black text-slate-800 tracking-tight flex items-center gap-1.5">
+                  <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-tight flex items-center gap-1.5">
                     <span>Filter Data Peta & Acuan Kolom</span>
                   </h3>
                   {isAnyFilterActive && (
-                    <span className="text-[11px] bg-indigo-100 text-indigo-800 font-extrabold px-2.5 py-0.5 rounded-full border border-indigo-200 animate-fadeIn">
+                    <span className="text-xs bg-indigo-100 text-indigo-800 font-extrabold px-2.5 py-0.5 rounded-full border border-indigo-200 animate-fadeIn">
                       Filter Aktif
                     </span>
                   )}
-                  <span className="hidden text-[11px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-md border border-slate-200">
-                    {uniqueCities.length} KC Terpetakan
+                  <span className="hidden text-xs bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-md border border-slate-200">
+                    {Number(uniqueCities.length).toLocaleString('id-ID')} KC Terpetakan
                   </span>
 
                   {/* Active filter summary chips */}
-                  <div className="hidden items-center gap-1.5 overflow-x-auto text-[10px]">
+                  <div className="hidden items-center gap-1.5 overflow-x-auto text-xs">
                     <span className="hidden bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md font-semibold text-indigo-800">
                       Bulan: <strong>{parseFilterValueList(selectedBulan).length > 0 ? parseFilterValueList(selectedBulan).join(', ') : 'Semua'}</strong>
                     </span>
@@ -1630,7 +1637,7 @@ export default function IndonesiaMap({
                     </span>
                   </div>
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">
+                <p className="text-sm text-slate-600 mt-0.5 font-medium">
                   {isFilterExpanded ? "Saring data berdasarkan Periode Bulan, KEPWIL, dan KC. Kolom acuan dapat disesuaikan." : "Klik 'Buka Filter' untuk mengubah kriteria penyaringan."}
                 </p>
               </div>
@@ -1642,14 +1649,14 @@ export default function IndonesiaMap({
               <button
                 type="button"
                 onClick={() => setIsColumnMappingModalOpen(true)}
-                className="px-3.5 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 hover:from-emerald-100 hover:to-teal-100 text-emerald-800 border border-emerald-200/90 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-3xs hover:shadow-2xs active:scale-95"
+                className="px-3.5 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 hover:from-emerald-100 hover:to-teal-100 text-emerald-800 border border-emerald-200/90 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-3xs hover:shadow-2xs active:scale-95"
                 id="open-column-mapping-modal-btn"
                 title="Pilih dan atur kolom Google Sheet / Excel yang menjadi acuan filter"
               >
-                <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                <SlidersHorizontal className="w-4 h-4 text-emerald-700 shrink-0" />
                 <span>Acuan Kolom</span>
-                <span className="bg-emerald-200/80 text-emerald-900 text-[10px] font-extrabold px-1.5 py-0.2 rounded-md ml-0.5">
-                  {detectedColumns.length}
+                <span className="bg-emerald-200/80 text-emerald-900 text-xs font-extrabold px-1.5 py-0.2 rounded-md ml-0.5 tabular-nums">
+                  {Number(detectedColumns.length).toLocaleString('id-ID')}
                 </span>
               </button>
 
@@ -1658,10 +1665,10 @@ export default function IndonesiaMap({
                 <button
                   type="button"
                   onClick={handleResetAllFilters}
-                  className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-3xs shrink-0 active:scale-95 animate-fadeIn"
+                  className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-3xs shrink-0 active:scale-95 animate-fadeIn"
                   id="reset-all-filters-btn"
                 >
-                  <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                  <RotateCcw className="w-4 h-4 text-rose-600" />
                   <span className="hidden sm:inline">Reset</span>
                 </button>
               )}
@@ -1670,7 +1677,7 @@ export default function IndonesiaMap({
               <button
                 type="button"
                 onClick={() => setIsFilterExpanded(!isFilterExpanded)}
-                className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-xl border transition-all cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300 shadow-2xs"
+                className="flex items-center gap-1.5 text-xs sm:text-sm font-bold px-3.5 py-2 rounded-xl border transition-all cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300 shadow-2xs"
                 id="toggle-map-filter-btn"
               >
                 <span>{isFilterExpanded ? 'Sembunyikan' : 'Buka Filter'}</span>
@@ -1830,26 +1837,26 @@ export default function IndonesiaMap({
         <div>
           <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
             <div>
-              <h2 className="text-xl font-bold tracking-tight text-slate-800 flex items-center gap-2">
+              <h2 className="text-xl sm:text-2xl font-black tracking-tight text-slate-800 flex items-center gap-2.5">
                 <MapPin className="text-rose-500 h-6 w-6 animate-pulse" />
                 Peta Geografis Realistis Indonesia
               </h2>
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-sm text-slate-600 mt-1 font-medium">
                 Visualisasi pesisir laut dan kepulauan Indonesia dengan marker layanan dinamis berdasarkan total aduan Kantor Cabang (KC).
               </p>
             </div>
             
             {/* Action Group */}
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2.5 flex-wrap">
               {/* MENU SEARCH KC / WILAYAH */}
-              <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-xl border border-slate-200 shadow-3xs relative">
+              <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 shadow-3xs relative">
                 <Search className="h-4 w-4 text-indigo-600 shrink-0" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Cari KC / Wilayah..."
-                  className="bg-white border border-slate-300 rounded-lg px-2 py-0.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder:font-normal placeholder:text-slate-400 shadow-3xs w-40 sm:w-48"
+                  className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder:font-normal placeholder:text-slate-400 shadow-3xs w-44 sm:w-52"
                   id="search-kc-input"
                 />
                 {searchQuery && (
@@ -1859,19 +1866,19 @@ export default function IndonesiaMap({
                     className="text-slate-400 hover:text-slate-700 p-0.5 rounded-full cursor-pointer"
                     title="Hapus pencarian"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    <X className="h-4 w-4" />
                   </button>
                 )}
               </div>
 
               {/* FILTER PULAU BESAR INDONESIA */}
-              <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-xl border border-slate-200 shadow-3xs">
+              <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 shadow-3xs">
                 <Globe className="h-4 w-4 text-indigo-600 shrink-0" />
-                <span className="text-xs font-bold text-slate-700 whitespace-nowrap hidden sm:inline">Pulau:</span>
+                <span className="text-xs sm:text-sm font-bold text-slate-700 whitespace-nowrap hidden sm:inline">Pulau:</span>
                 <select
                   value={selectedIsland}
                   onChange={(e) => setSelectedIsland(e.target.value)}
-                  className="bg-white border border-slate-300 rounded-lg px-2 py-0.5 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-3xs"
+                  className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs sm:text-sm font-bold text-slate-800 focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-3xs"
                   id="select-island-filter"
                 >
                   <option value="Semua">🌏 Semua Pulau (Indonesia)</option>
@@ -1883,8 +1890,8 @@ export default function IndonesiaMap({
                   <option value="Maluku & Papua">🏝️ Kep. Maluku & Papua</option>
                 </select>
                 {(selectedIsland !== 'Semua' || searchQuery) && (
-                  <span className="text-[10px] bg-indigo-600 text-white font-extrabold px-2 py-0.5 rounded-md shrink-0">
-                    {filteredCities.length} KC
+                  <span className="text-xs bg-indigo-600 text-white font-extrabold px-2 py-0.5 rounded-md shrink-0 tabular-nums">
+                    {Number(filteredCities.length).toLocaleString('id-ID')} KC
                   </span>
                 )}
               </div>
@@ -1924,28 +1931,28 @@ export default function IndonesiaMap({
           </div>
 
           {/* COMPACT & RINGKAS COLOR LEGEND BASED ON CONFIGURABLE SERVICE TOTAL */}
-          <div className="flex items-center justify-between gap-3 bg-slate-50/90 px-4 py-2.5 rounded-xl border border-slate-200/80 text-xs text-slate-700 mb-4 shadow-3xs flex-wrap">
+          <div className="flex items-center justify-between gap-3 bg-slate-50/90 px-4 py-3 rounded-xl border border-slate-200/80 text-xs sm:text-sm text-slate-700 mb-4 shadow-3xs flex-wrap">
             <div className="flex items-center gap-2.5 flex-wrap min-w-0">
-              <span className="text-slate-600 font-extrabold uppercase tracking-wider text-[11px] shrink-0">Indikator Volume:</span>
+              <span className="text-slate-700 font-extrabold uppercase tracking-wider text-xs sm:text-sm shrink-0">Indikator Volume:</span>
               
-              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-3xs">
-                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: '#818cf8' }}></span>
-                <span className="font-bold text-xs text-slate-800">&lt; {volumeThresholds.rendahMax} <span className="text-slate-500 font-normal">(Rendah)</span></span>
+              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-3xs">
+                <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ backgroundColor: '#818cf8' }}></span>
+                <span className="font-bold text-xs sm:text-sm text-slate-800 tabular-nums">&lt; {Number(volumeThresholds.rendahMax).toLocaleString('id-ID')} <span className="text-slate-600 font-semibold">(Rendah)</span></span>
               </div>
 
-              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-3xs">
-                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: '#14b8a6' }}></span>
-                <span className="font-bold text-xs text-slate-800">{volumeThresholds.rendahMax + 1} - {volumeThresholds.sedangMax} <span className="text-slate-500 font-normal">(Sedang)</span></span>
+              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-3xs">
+                <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ backgroundColor: '#14b8a6' }}></span>
+                <span className="font-bold text-xs sm:text-sm text-slate-800 tabular-nums">{Number(volumeThresholds.rendahMax + 1).toLocaleString('id-ID')} - {Number(volumeThresholds.sedangMax).toLocaleString('id-ID')} <span className="text-slate-600 font-semibold">(Sedang)</span></span>
               </div>
 
-              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-3xs">
-                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: '#f59e0b' }}></span>
-                <span className="font-bold text-xs text-slate-800">{volumeThresholds.sedangMax + 1} - {volumeThresholds.tinggiMax} <span className="text-slate-500 font-normal">(Tinggi)</span></span>
+              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-3xs">
+                <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ backgroundColor: '#f59e0b' }}></span>
+                <span className="font-bold text-xs sm:text-sm text-slate-800 tabular-nums">{Number(volumeThresholds.sedangMax + 1).toLocaleString('id-ID')} - {Number(volumeThresholds.tinggiMax).toLocaleString('id-ID')} <span className="text-slate-600 font-semibold">(Tinggi)</span></span>
               </div>
 
-              <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-3xs">
-                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: '#f43f5e' }}></span>
-                <span className="font-bold text-xs text-slate-800">&gt; {volumeThresholds.tinggiMax} <span className="text-slate-500 font-normal">(Sangat Tinggi)</span></span>
+              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-3xs">
+                <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ backgroundColor: '#f43f5e' }}></span>
+                <span className="font-bold text-xs sm:text-sm text-slate-800 tabular-nums">&gt; {Number(volumeThresholds.tinggiMax).toLocaleString('id-ID')} <span className="text-slate-600 font-semibold">(Sangat Tinggi)</span></span>
               </div>
             </div>
 
@@ -1956,11 +1963,11 @@ export default function IndonesiaMap({
                   setTempThresholds(volumeThresholds);
                   setIsIndicatorModalOpen(true);
                 }}
-                className="flex items-center gap-1.5 text-xs font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-lg border border-indigo-200 transition-colors cursor-pointer shrink-0 ml-auto shadow-3xs"
+                className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-3.5 py-1.5 rounded-lg border border-indigo-200 transition-colors cursor-pointer shrink-0 ml-auto shadow-3xs"
                 id="edit-volume-indicator-btn"
                 title="Edit Nilai Indikator Volume (Admin)"
               >
-                <Settings2 className="h-3.5 w-3.5" />
+                <Settings2 className="h-4 w-4" />
                 <span>Edit Indikator</span>
               </button>
             ) : null}
@@ -2247,11 +2254,11 @@ export default function IndonesiaMap({
         className="col-span-12 bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col justify-between text-slate-800 transition-all animate-fadeIn"
       >
         <div className="flex-1 flex flex-col justify-between">
-          <div className="border-b border-slate-100 pb-3.5 mb-4 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div className="border-b border-slate-100 pb-4 mb-4 flex flex-wrap items-center justify-between gap-3 shrink-0">
             <div>
-              <span className="text-[10px] text-indigo-600 block font-black uppercase tracking-wider">Detail Informasi Wilayah</span>
-              <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 mt-0.5">
-                <MapPin className="h-5 w-5 text-rose-500 shrink-0" />
+              <span className="text-xs sm:text-sm text-indigo-600 block font-black uppercase tracking-wider">Detail Informasi Wilayah</span>
+              <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2.5 mt-0.5">
+                <MapPin className="h-6 w-6 text-rose-500 shrink-0" />
                 {selectedCity
                   ? isKepwilFilterActive && !isKCFilterActive && !selectedCityId
                     ? `Kedeputian Wilayah ${selectedCity.name.replace(/^(kedeputian\s+wilayah|kepwil)\s*/i, '')}`
@@ -2260,18 +2267,18 @@ export default function IndonesiaMap({
               </h3>
             </div>
 
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2.5 flex-wrap">
               {selectedCity && (
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-xl">
-                    <strong className="text-slate-800">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-bold text-slate-700 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-xl">
+                    <strong className="text-slate-900 tabular-nums">
                       {selectedCity.id === 'aggregated_filter_selection'
-                        ? `${uniqueCities.length} Kantor Cabang`
+                        ? `${Number(uniqueCities.length).toLocaleString('id-ID')} Kantor Cabang`
                         : getIslandForCity(selectedCity.name, selectedCity.latitude, selectedCity.longitude)}
                     </strong>
                   </span>
-                  <span className="text-xs font-extrabold text-white bg-indigo-600 px-2.5 py-1 rounded-xl shadow-2xs">
-                    {selectedCity.total} Tiket
+                  <span className="text-sm font-black text-white bg-indigo-600 px-3.5 py-1.5 rounded-xl shadow-2xs tabular-nums">
+                    {Math.round(Number(selectedCity.total)).toLocaleString('id-ID')} Tiket
                   </span>
                 </div>
               )}
@@ -2280,122 +2287,113 @@ export default function IndonesiaMap({
 
           {selectedCity ? (
             <>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5 flex-1 items-stretch my-1">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 flex-1 items-stretch my-1">
               
               {/* LAYANAN INFORMASI STAT */}
-              <div className="p-3.5 sm:p-4 bg-indigo-50/70 border border-indigo-100 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-indigo-50/90 transition-all">
+              <div className="p-4 sm:p-5 bg-indigo-50/70 border border-indigo-100 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-indigo-50/90 transition-all">
                 <div>
-                  <div className="flex items-center justify-between gap-3 mb-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="p-2 bg-indigo-100/90 rounded-lg text-indigo-700 shrink-0 shadow-3xs">
-                        <Info className="h-4.5 w-4.5" />
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="p-2.5 bg-indigo-100/90 rounded-lg text-indigo-700 shrink-0 shadow-3xs">
+                        <Info className="h-5 w-5" />
                       </span>
                       <div className="truncate">
-                        <span className="text-sm sm:text-base font-black text-indigo-950 block truncate">Layanan Informasi</span>
-                        <span className="text-[11px] text-indigo-600 font-semibold block truncate">Permintaan info kepesertaan</span>
+                        <span className="text-base sm:text-lg font-black text-indigo-950 block truncate">Layanan Informasi</span>
+                        <span className="text-xs sm:text-sm text-indigo-700 font-semibold block truncate">Permintaan info kepesertaan</span>
                       </div>
                     </div>
-                    <span className="text-xs font-black bg-indigo-100 text-indigo-800 px-2.5 py-1 rounded-lg font-mono shadow-3xs shrink-0 border border-indigo-200/60">
-                      {selectedCity.total > 0 ? Math.round((selectedCity.informasi / selectedCity.total) * 100) : 0}%
-                    </span>
                   </div>
 
-                  <div className="flex items-baseline justify-between gap-2 mt-1">
-                    <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono leading-none tracking-tight">
-                      {selectedCity.informasi.toLocaleString('id-ID')}
+                  <div className="flex items-baseline justify-between gap-2 mt-2">
+                    <div className="text-3xl sm:text-4xl font-black text-slate-900 tabular-nums leading-none tracking-tight">
+                      {Math.round(Number(selectedCity.informasi)).toLocaleString('id-ID')}
                     </div>
-                    <span className="text-[11px] text-slate-500 font-bold uppercase tracking-wider">tiket</span>
+                    <span className="text-xs sm:text-sm text-slate-600 font-extrabold uppercase tracking-wider">tiket</span>
                   </div>
                 </div>
 
                 {/* Progress bar */}
-                <div className="w-full bg-indigo-100/90 h-2 rounded-full overflow-hidden mt-3 shadow-inner">
+                <div className="w-full bg-indigo-100/90 h-2.5 rounded-full overflow-hidden mt-3.5 shadow-inner">
                   <div className="bg-indigo-600 h-full rounded-full transition-all duration-500 shadow-2xs" style={{ width: `${selectedCity.total > 0 ? (selectedCity.informasi / selectedCity.total) * 100 : 0}%` }}></div>
                 </div>
               </div>
 
               {/* PERMINTAAN TINDAKAN STAT */}
-              <div className="p-3.5 sm:p-4 bg-teal-50/70 border border-teal-100 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-teal-50/90 transition-all">
+              <div className="p-4 sm:p-5 bg-teal-50/70 border border-teal-100 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-teal-50/90 transition-all">
                 <div>
-                  <div className="flex items-center justify-between gap-3 mb-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="p-2 bg-teal-100/90 rounded-lg text-teal-700 shrink-0 shadow-3xs">
-                        <ArrowUpRight className="h-4.5 w-4.5" />
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="p-2.5 bg-teal-100/90 rounded-lg text-teal-700 shrink-0 shadow-3xs">
+                        <ArrowUpRight className="h-5 w-5" />
                       </span>
                       <div className="truncate">
-                        <span className="text-sm sm:text-base font-black text-teal-950 block truncate">Permintaan Tindakan</span>
-                        <span className="text-[11px] text-teal-600 font-semibold block truncate">Kebutuhan eskalasi teknis</span>
+                        <span className="text-base sm:text-lg font-black text-teal-950 block truncate">Permintaan Tindakan</span>
+                        <span className="text-xs sm:text-sm text-teal-700 font-semibold block truncate">Kebutuhan eskalasi teknis</span>
                       </div>
                     </div>
-                    <span className="text-xs font-black bg-teal-100 text-teal-800 px-2.5 py-1 rounded-lg font-mono shadow-3xs shrink-0 border border-teal-200/60">
-                      {selectedCity.total > 0 ? Math.round((selectedCity.permintaan / selectedCity.total) * 100) : 0}%
-                    </span>
                   </div>
 
-                  <div className="flex items-baseline justify-between gap-2 mt-1">
-                    <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono leading-none tracking-tight">
-                      {selectedCity.permintaan.toLocaleString('id-ID')}
+                  <div className="flex items-baseline justify-between gap-2 mt-2">
+                    <div className="text-3xl sm:text-4xl font-black text-slate-900 tabular-nums leading-none tracking-tight">
+                      {Math.round(Number(selectedCity.permintaan)).toLocaleString('id-ID')}
                     </div>
-                    <span className="text-[11px] text-slate-500 font-bold uppercase tracking-wider">tiket</span>
+                    <span className="text-xs sm:text-sm text-slate-600 font-extrabold uppercase tracking-wider">tiket</span>
                   </div>
                 </div>
 
                 {/* Progress bar */}
-                <div className="w-full bg-teal-100/90 h-2 rounded-full overflow-hidden mt-3 shadow-inner">
+                <div className="w-full bg-teal-100/90 h-2.5 rounded-full overflow-hidden mt-3.5 shadow-inner">
                   <div className="bg-teal-600 h-full rounded-full transition-all duration-500 shadow-2xs" style={{ width: `${selectedCity.total > 0 ? (selectedCity.permintaan / selectedCity.total) * 100 : 0}%` }}></div>
                 </div>
               </div>
 
               {/* PENGADUAN LAYANAN STAT */}
-              <div className="p-3.5 sm:p-4 bg-amber-50/70 border border-amber-100 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-amber-50/90 transition-all">
+              <div className="p-4 sm:p-5 bg-amber-50/70 border border-amber-100 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-amber-50/90 transition-all">
                 <div>
-                  <div className="flex items-center justify-between gap-3 mb-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="p-2 bg-amber-100/90 rounded-lg text-amber-700 shrink-0 shadow-3xs">
-                        <HelpCircle className="h-4.5 w-4.5" />
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="p-2.5 bg-amber-100/90 rounded-lg text-amber-700 shrink-0 shadow-3xs">
+                        <HelpCircle className="h-5 w-5" />
                       </span>
                       <div className="truncate">
-                        <span className="text-sm sm:text-base font-black text-amber-950 block truncate">Pengaduan Layanan</span>
-                        <span className="text-[11px] text-amber-600 font-semibold block truncate">Keluhan & isu operasional</span>
+                        <span className="text-base sm:text-lg font-black text-amber-950 block truncate">Pengaduan Layanan</span>
+                        <span className="text-xs sm:text-sm text-amber-700 font-semibold block truncate">Keluhan & isu operasional</span>
                       </div>
                     </div>
-                    <span className="text-xs font-black bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg font-mono shadow-3xs shrink-0 border border-amber-200/60">
-                      {selectedCity.total > 0 ? Math.round((selectedCity.pengaduan / selectedCity.total) * 100) : 0}%
-                    </span>
                   </div>
 
-                  <div className="flex items-baseline justify-between gap-2 mt-1">
-                    <div className="text-2xl sm:text-3xl font-black text-slate-900 font-mono leading-none tracking-tight">
-                      {selectedCity.pengaduan.toLocaleString('id-ID')}
+                  <div className="flex items-baseline justify-between gap-2 mt-2">
+                    <div className="text-3xl sm:text-4xl font-black text-slate-900 tabular-nums leading-none tracking-tight">
+                      {Math.round(Number(selectedCity.pengaduan)).toLocaleString('id-ID')}
                     </div>
-                    <span className="text-[11px] text-slate-500 font-bold uppercase tracking-wider">tiket</span>
+                    <span className="text-xs sm:text-sm text-slate-600 font-extrabold uppercase tracking-wider">tiket</span>
                   </div>
                 </div>
 
                 {/* Progress bar */}
-                <div className="w-full bg-amber-100/90 h-2 rounded-full overflow-hidden mt-3 shadow-inner">
+                <div className="w-full bg-amber-100/90 h-2.5 rounded-full overflow-hidden mt-3.5 shadow-inner">
                   <div className="bg-amber-500 h-full rounded-full transition-all duration-500 shadow-2xs" style={{ width: `${selectedCity.total > 0 ? (selectedCity.pengaduan / selectedCity.total) * 100 : 0}%` }}></div>
                 </div>
               </div>
 
               {/* INDIKATOR KEPATUHAN & KESESUAIAN SLA LENGKAP */}
-              <div className="p-3.5 sm:p-4 bg-slate-50/90 border border-slate-200 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-slate-100/80 transition-all">
+              <div className="p-4 sm:p-5 bg-slate-50/90 border border-slate-200 rounded-xl flex flex-col justify-between shadow-2xs hover:bg-slate-100/80 transition-all">
                 <div>
-                  <div className="flex items-center justify-between gap-2.5 mb-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className={`p-2 rounded-lg shrink-0 shadow-3xs ${
+                  <div className="flex items-center justify-between gap-2.5 mb-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className={`p-2.5 rounded-lg shrink-0 shadow-3xs ${
                         selectedCity.slaCompliance >= 90 ? 'bg-emerald-100 text-emerald-700' :
                         selectedCity.slaCompliance >= 85 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'
                       }`}>
-                        <Award className="h-4.5 w-4.5" />
+                        <Award className="h-5 w-5" />
                       </span>
                       <div className="truncate">
-                        <span className="text-sm sm:text-base font-black text-slate-900 block truncate">Kepatuhan SLA</span>
-                        <span className="text-[11px] text-slate-500 font-bold block truncate">Target: &ge; 85%</span>
+                        <span className="text-base sm:text-lg font-black text-slate-900 block truncate">Kepatuhan SLA</span>
+                        <span className="text-xs sm:text-sm text-slate-600 font-bold block truncate">Target: &ge; 85,00%</span>
                       </div>
                     </div>
 
-                    <span className={`text-xs font-black px-2.5 py-1 rounded-lg shadow-3xs shrink-0 font-mono border ${
+                    <span className={`text-xs sm:text-sm font-black px-3 py-1 rounded-lg shadow-3xs shrink-0 border ${
                       selectedCity.slaCompliance >= 90 ? 'bg-emerald-100 text-emerald-800 border-emerald-200/80' :
                       selectedCity.slaCompliance >= 85 ? 'bg-amber-100 text-amber-800 border-amber-200/80' : 'bg-rose-100 text-rose-800 border-rose-200/80'
                     }`}>
@@ -2403,29 +2401,19 @@ export default function IndonesiaMap({
                     </span>
                   </div>
 
-                  <div className="flex items-baseline justify-between gap-2 mt-1">
-                    <div className={`text-2xl sm:text-3xl font-black font-mono leading-none tracking-tight ${
+                  <div className="flex items-baseline justify-between gap-2 mt-2">
+                    <div className={`text-3xl sm:text-4xl font-black tabular-nums leading-none tracking-tight ${
                       selectedCity.slaCompliance >= 90 ? 'text-emerald-600' :
                       selectedCity.slaCompliance >= 85 ? 'text-amber-600' : 'text-rose-600'
                     }`}>
-                      {selectedCity.slaCompliance}%
+                      {Number(selectedCity.slaCompliance || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
                     </div>
-                    <span className={`inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full border shadow-2xs ${
-                      selectedCity.slaCompliance >= 90 ? 'bg-emerald-50 text-emerald-700 border-emerald-300' :
-                      selectedCity.slaCompliance >= 85 ? 'bg-amber-50 text-amber-700 border-amber-300' : 'bg-rose-50 text-rose-700 border-rose-300'
-                    }`}>
-                      {selectedCity.slaCompliance >= 85 ? (
-                        <CheckCircle2 className="h-3 w-3 text-emerald-600 shrink-0" />
-                      ) : (
-                        <AlertCircle className="h-3 w-3 text-rose-600 shrink-0" />
-                      )}
-                      {selectedCity.slaCompliance >= 85 ? `+${(selectedCity.slaCompliance - 85).toFixed(1)}%` : `${(selectedCity.slaCompliance - 85).toFixed(1)}%`}
-                    </span>
+                    <span className="text-xs sm:text-sm text-slate-600 font-extrabold uppercase tracking-wider">persen</span>
                   </div>
                 </div>
 
                 {/* SLA Progress Bar */}
-                <div className="relative w-full bg-slate-200 h-2 rounded-full overflow-hidden mt-3 shadow-inner">
+                <div className="relative w-full bg-slate-200 h-2.5 rounded-full overflow-hidden mt-3.5 shadow-inner">
                   <div 
                     className={`h-full rounded-full transition-all duration-500 shadow-2xs ${
                       selectedCity.slaCompliance >= 90 ? 'bg-emerald-500' :
@@ -2439,16 +2427,16 @@ export default function IndonesiaMap({
             </div>
             </>
           ) : (
-            <div className="py-12 text-center text-slate-400 my-auto">
-              <Info className="h-8 w-8 mx-auto mb-2 text-slate-300 animate-pulse" />
-              <p className="text-xs font-bold">Silakan pilih titik kota pada peta untuk memunculkan detail laporan.</p>
+            <div className="py-12 text-center text-slate-500 my-auto">
+              <Info className="h-9 w-9 mx-auto mb-2 text-slate-300 animate-pulse" />
+              <p className="text-sm font-bold">Silakan pilih titik kota pada peta untuk memunculkan detail laporan.</p>
             </div>
           )}
         </div>
 
-        <div className="mt-4 border-t border-slate-100 pt-3 flex items-center gap-2 justify-between text-[10px] text-slate-400 font-medium shrink-0">
+        <div className="mt-4 border-t border-slate-100 pt-3 flex items-center gap-2 justify-between text-xs text-slate-500 font-semibold shrink-0">
           <span>Sistem Pemetaan Kantor Cabang & Stat Laporan</span>
-          <span className="text-indigo-600 font-bold flex items-center gap-1">
+          <span className="text-indigo-600 font-bold flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
             Live Data Active
           </span>
@@ -2486,43 +2474,43 @@ export default function IndonesiaMap({
       <div className="col-span-12 lg:col-span-12 bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-100">
           <div>
-            <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
-              <Trophy className="text-amber-500 h-5 w-5" />
+            <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2.5">
+              <Trophy className="text-amber-500 h-6 w-6 shrink-0" />
               Peringkat 10 Top & 10 Bottom Layanan / Kantor Cabang
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">Analisis komparatif unit layanan terbaik dan unit yang memerlukan perhatian khusus di peta.</p>
+            <p className="text-sm sm:text-base text-slate-600 mt-1 font-medium">Analisis komparatif unit layanan terbaik dan unit yang memerlukan perhatian khusus di peta.</p>
           </div>
 
           {/* Metric Selector Tabs */}
-          <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200 text-xs">
-            <span className="text-[10px] text-slate-400 font-bold px-2 uppercase">Kriteria:</span>
+          <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200 text-sm">
+            <span className="text-xs sm:text-sm text-slate-600 font-extrabold px-2 uppercase">Kriteria:</span>
             <button
               onClick={() => setRankingMetric('total')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'total' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+              className={`px-4 py-2 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'total' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'}`}
             >
               Total Laporan
             </button>
             <button
               onClick={() => setRankingMetric('slaCompliance')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'slaCompliance' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+              className={`px-4 py-2 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'slaCompliance' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'}`}
             >
               Kepatuhan SLA
             </button>
             <button
               onClick={() => setRankingMetric('informasi')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'informasi' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+              className={`px-4 py-2 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'informasi' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'}`}
             >
               Informasi
             </button>
             <button
               onClick={() => setRankingMetric('permintaan')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'permintaan' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+              className={`px-4 py-2 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'permintaan' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'}`}
             >
               Permintaan
             </button>
             <button
               onClick={() => setRankingMetric('pengaduan')}
-              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'pengaduan' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+              className={`px-4 py-2 rounded-lg font-bold transition-all cursor-pointer ${rankingMetric === 'pengaduan' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'}`}
             >
               Pengaduan
             </button>
@@ -2532,41 +2520,49 @@ export default function IndonesiaMap({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           
           {/* TOP 10 LAYANAN / CABANG */}
-          <div className="bg-emerald-50/20 border border-emerald-200/80 rounded-2xl p-5 flex flex-col justify-between">
+          <div className="bg-emerald-50/20 border border-emerald-200/80 rounded-2xl p-5 sm:p-6 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-4">
-                <h4 className="font-bold text-emerald-900 text-sm flex items-center gap-2">
-                  <Trophy className="h-4.5 w-4.5 text-emerald-600" />
+                <h4 className="font-black text-emerald-900 text-lg sm:text-xl flex items-center gap-2.5">
+                  <Trophy className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-600 shrink-0" />
                   10 Top Layanan & Kantor Cabang Terbaik
                 </h4>
-                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-lg">Tertinggi</span>
+                <span className="text-xs sm:text-sm font-extrabold bg-emerald-100 text-emerald-800 px-3.5 py-1 rounded-lg">Tertinggi</span>
               </div>
 
-              <div className="space-y-2.5">
+              <div className="space-y-3">
                 {top10.map((item, index) => {
-                  const val = parseNumericValue(item[rankingMetric]);
+                  const rawMetricVal = Number(parseNumericValue(item[rankingMetric]) || 0);
+                  const formattedMetricVal = rankingMetric === 'slaCompliance'
+                    ? `${rawMetricVal.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
+                    : Math.round(rawMetricVal).toLocaleString('id-ID');
+                  const infoCount = Math.round(Number(parseNumericValue(item.informasi)));
+                  const permintaanCount = Math.round(Number(parseNumericValue(item.permintaan)));
+                  const pengaduanCount = Math.round(Number(parseNumericValue(item.pengaduan)));
                   return (
                     <div 
                       key={`top-${item.id}`} 
                       onClick={() => setSelectedCityId(item.id)}
-                      className={`bg-white border p-3 rounded-xl flex items-center justify-between text-xs shadow-2xs transition-colors cursor-pointer ${selectedCityId === item.id ? 'border-emerald-500 ring-1 ring-emerald-500 bg-emerald-50/30' : 'border-emerald-100 hover:border-emerald-300'}`}
+                      className={`bg-white border p-4 rounded-xl flex items-center justify-between gap-3.5 shadow-2xs transition-colors cursor-pointer ${selectedCityId === item.id ? 'border-emerald-500 ring-1 ring-emerald-500 bg-emerald-50/30' : 'border-emerald-100 hover:border-emerald-300'}`}
                     >
-                      <div className="flex items-center gap-3">
-                        <span className={`w-6 h-6 rounded-lg flex items-center justify-center font-bold font-mono text-[11px] ${
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <span className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center font-black tabular-nums text-base sm:text-lg shrink-0 ${
                           index === 0 ? 'bg-amber-400 text-white shadow-xs' :
                           index === 1 ? 'bg-slate-300 text-slate-800' :
-                          index === 2 ? 'bg-amber-700 text-white' : 'bg-slate-100 text-slate-600'
+                          index === 2 ? 'bg-amber-700 text-white' : 'bg-slate-100 text-slate-700'
                         }`}>
                           {index + 1}
                         </span>
-                        <div>
-                          <span className="font-bold text-slate-800 block">{item.name}</span>
-                          <span className="text-[10px] text-slate-400">SLA: {item.slaCompliance}% | Rata-rata: {item.avgSlaDays} hari</span>
+                        <div className="min-w-0">
+                          <span className="font-black text-slate-900 text-base sm:text-lg block truncate">{item.name}</span>
+                          <span className="text-sm sm:text-base font-bold text-slate-700 mt-1 block">
+                            Informasi: <strong className="tabular-nums font-black text-indigo-700">{infoCount.toLocaleString('id-ID')}</strong> | Permintaan: <strong className="tabular-nums font-black text-teal-700">{permintaanCount.toLocaleString('id-ID')}</strong> | Pengaduan: <strong className="tabular-nums font-black text-rose-700">{pengaduanCount.toLocaleString('id-ID')}</strong>
+                          </span>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <span className="font-mono font-black text-emerald-700 text-sm">
-                          {val} {rankingMetric === 'slaCompliance' ? '%' : 'laporan'}
+                      <div className="text-right shrink-0">
+                        <span className="tabular-nums font-black text-emerald-700 text-lg sm:text-2xl">
+                          {formattedMetricVal}
                         </span>
                       </div>
                     </div>
@@ -2577,37 +2573,45 @@ export default function IndonesiaMap({
           </div>
 
           {/* BOTTOM 10 LAYANAN / CABANG */}
-          <div className="bg-rose-50/20 border border-rose-200/80 rounded-2xl p-5 flex flex-col justify-between">
+          <div className="bg-rose-50/20 border border-rose-200/80 rounded-2xl p-5 sm:p-6 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-4">
-                <h4 className="font-bold text-rose-900 text-sm flex items-center gap-2">
-                  <TrendingDown className="h-4.5 w-4.5 text-rose-600" />
+                <h4 className="font-black text-rose-900 text-lg sm:text-xl flex items-center gap-2.5">
+                  <TrendingDown className="h-5 w-5 sm:h-6 sm:w-6 text-rose-600 shrink-0" />
                   10 Bottom Layanan & Kantor Cabang (Perlu Perhatian)
                 </h4>
-                <span className="text-[10px] font-bold bg-rose-100 text-rose-800 px-2.5 py-1 rounded-lg">Terendah</span>
+                <span className="text-xs sm:text-sm font-extrabold bg-rose-100 text-rose-800 px-3.5 py-1 rounded-lg">Terendah</span>
               </div>
 
-              <div className="space-y-2.5">
+              <div className="space-y-3">
                 {bottom10.map((item, index) => {
-                  const val = parseNumericValue(item[rankingMetric]);
+                  const rawMetricVal = Number(parseNumericValue(item[rankingMetric]) || 0);
+                  const formattedMetricVal = rankingMetric === 'slaCompliance'
+                    ? `${rawMetricVal.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
+                    : Math.round(rawMetricVal).toLocaleString('id-ID');
+                  const infoCount = Math.round(Number(parseNumericValue(item.informasi)));
+                  const permintaanCount = Math.round(Number(parseNumericValue(item.permintaan)));
+                  const pengaduanCount = Math.round(Number(parseNumericValue(item.pengaduan)));
                   return (
                     <div 
                       key={`bottom-${item.id}`} 
                       onClick={() => setSelectedCityId(item.id)}
-                      className={`bg-white border p-3 rounded-xl flex items-center justify-between text-xs shadow-2xs transition-colors cursor-pointer ${selectedCityId === item.id ? 'border-rose-500 ring-1 ring-rose-500 bg-rose-50/30' : 'border-rose-100 hover:border-rose-300'}`}
+                      className={`bg-white border p-4 rounded-xl flex items-center justify-between gap-3.5 shadow-2xs transition-colors cursor-pointer ${selectedCityId === item.id ? 'border-rose-500 ring-1 ring-rose-500 bg-rose-50/30' : 'border-rose-100 hover:border-rose-300'}`}
                     >
-                      <div className="flex items-center gap-3">
-                        <span className="w-6 h-6 rounded-lg flex items-center justify-center font-bold font-mono text-[11px] bg-rose-100 text-rose-700">
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <span className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center font-black tabular-nums text-base sm:text-lg shrink-0 bg-rose-100 text-rose-700">
                           {index + 1}
                         </span>
-                        <div>
-                          <span className="font-bold text-slate-800 block">{item.name}</span>
-                          <span className="text-[10px] text-slate-400">SLA: {item.slaCompliance}% | Rata-rata: {item.avgSlaDays} hari</span>
+                        <div className="min-w-0">
+                          <span className="font-black text-slate-900 text-base sm:text-lg block truncate">{item.name}</span>
+                          <span className="text-sm sm:text-base font-bold text-slate-700 mt-1 block">
+                            Informasi: <strong className="tabular-nums font-black text-indigo-700">{infoCount.toLocaleString('id-ID')}</strong> | Permintaan: <strong className="tabular-nums font-black text-teal-700">{permintaanCount.toLocaleString('id-ID')}</strong> | Pengaduan: <strong className="tabular-nums font-black text-rose-700">{pengaduanCount.toLocaleString('id-ID')}</strong>
+                          </span>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <span className="font-mono font-black text-rose-700 text-sm">
-                          {val} {rankingMetric === 'slaCompliance' ? '%' : 'laporan'}
+                      <div className="text-right shrink-0">
+                        <span className="tabular-nums font-black text-rose-700 text-lg sm:text-2xl">
+                          {formattedMetricVal}
                         </span>
                       </div>
                     </div>

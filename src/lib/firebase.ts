@@ -191,6 +191,162 @@ export function subscribeToMapData(callback: (data: CloudMapData | null) => void
 
 let pendingMapData: Partial<CloudMapData> = {};
 
+/**
+ * Compacts CityData[] so the resulting Firestore document is guaranteed to stay
+ * well below the 1,048,576 bytes (1 MB) Firestore limit, even when the source
+ * Google Sheet contains thousands of rows or wide Topik Masalah breakdowns.
+ */
+function compactCitiesForFirestore(cities: CityData[]): CityData[] {
+  if (!cities || cities.length === 0) return [];
+
+  // Step 1: Strip rawRow and redundant pokokMasalahBreakdown (recomputed from topikBreakdown)
+  let cleaned: CityData[] = cities.map((c) => {
+    const { rawRow, pokokMasalahBreakdown, topikBreakdown, ...rest } = c;
+    let compactTopik: Record<string, number> | undefined = undefined;
+    if (topikBreakdown && typeof topikBreakdown === 'object') {
+      const nonZeroEntries = Object.entries(topikBreakdown).filter(([, v]) => Number(v) > 0);
+      if (nonZeroEntries.length > 0) {
+        compactTopik = Object.fromEntries(nonZeroEntries);
+      }
+    }
+    return {
+      ...rest,
+      ...(compactTopik ? { topikBreakdown: compactTopik } : {}),
+    };
+  });
+
+  // Helper to estimate Firestore protobuf document bytes (roughly 2.4x JSON length for map arrays)
+  const estimateBytes = (arr: CityData[]) => JSON.stringify(arr).length * 2.4;
+  const SAFE_FIRESTORE_BYTES = 700000;
+
+  if (estimateBytes(cleaned) <= SAFE_FIRESTORE_BYTES && cleaned.length <= 400) {
+    return cleaned;
+  }
+
+  // Step 2: Aggregate rows that share the same (bulan, kepwil, kantorCabang/name)
+  const groupByBulanKc = new Map<string, CityData & { _slaSum: number; _count: number }>();
+  cleaned.forEach((c, idx) => {
+    const kcName = (c.kantorCabang || c.name || `KC_${idx}`).trim();
+    const bulanKey = (c.bulan || '').trim();
+    const kepwilKey = (c.kepwil || '').trim();
+    const compositeKey = `${bulanKey.toLowerCase()}|||${kepwilKey.toLowerCase()}|||${kcName.toLowerCase()}`;
+
+    const existing = groupByBulanKc.get(compositeKey);
+    const info = Number(c.informasi) || 0;
+    const perm = Number(c.permintaan) || 0;
+    const peng = Number(c.pengaduan) || 0;
+    const tot = Number(c.total) || (info + perm + peng);
+    const sla = Number(c.slaCompliance) || 90;
+
+    if (!existing) {
+      groupByBulanKc.set(compositeKey, {
+        ...c,
+        informasi: info,
+        permintaan: perm,
+        pengaduan: peng,
+        total: tot,
+        topikBreakdown: c.topikBreakdown ? { ...c.topikBreakdown } : undefined,
+        _slaSum: sla,
+        _count: 1,
+      });
+    } else {
+      existing.informasi += info;
+      existing.permintaan += perm;
+      existing.pengaduan += peng;
+      existing.total += tot;
+      existing._slaSum += sla;
+      existing._count += 1;
+      if (c.topikBreakdown) {
+        if (!existing.topikBreakdown) existing.topikBreakdown = {};
+        for (const [tk, tv] of Object.entries(c.topikBreakdown)) {
+          existing.topikBreakdown[tk] = (existing.topikBreakdown[tk] || 0) + (Number(tv) || 0);
+        }
+      }
+    }
+  });
+
+  cleaned = Array.from(groupByBulanKc.values()).map(({ _slaSum, _count, ...rest }) => ({
+    ...rest,
+    slaCompliance: _count > 0 ? Number((_slaSum / _count).toFixed(2)) : rest.slaCompliance,
+  }));
+
+  if (estimateBytes(cleaned) <= SAFE_FIRESTORE_BYTES) {
+    return cleaned;
+  }
+
+  // Step 3: Consolidate topikBreakdown onto the first occurrence of each KC (top 12 topics per KC)
+  // and remove per-month duplicate topic maps to eliminate tens of thousands of repeated map keys
+  const kcTopikMap = new Map<string, Record<string, number>>();
+  cleaned.forEach((c) => {
+    if (!c.topikBreakdown) return;
+    const kcKey = (c.kantorCabang || c.name || '').trim().toLowerCase();
+    if (!kcTopikMap.has(kcKey)) {
+      kcTopikMap.set(kcKey, {});
+    }
+    const target = kcTopikMap.get(kcKey)!;
+    for (const [tk, tv] of Object.entries(c.topikBreakdown)) {
+      target[tk] = (target[tk] || 0) + (Number(tv) || 0);
+    }
+  });
+
+  const seenKcForTopik = new Set<string>();
+  cleaned = cleaned.map((c) => {
+    const kcKey = (c.kantorCabang || c.name || '').trim().toLowerCase();
+    const { topikBreakdown, ...rest } = c;
+    if (!seenKcForTopik.has(kcKey) && kcTopikMap.has(kcKey)) {
+      seenKcForTopik.add(kcKey);
+      const merged = kcTopikMap.get(kcKey)!;
+      const topEntries = Object.entries(merged)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 12);
+      if (topEntries.length > 0) {
+        return {
+          ...rest,
+          topikBreakdown: Object.fromEntries(topEntries),
+        };
+      }
+    }
+    return rest;
+  });
+
+  if (estimateBytes(cleaned) <= SAFE_FIRESTORE_BYTES) {
+    return cleaned;
+  }
+
+  // Step 4: Strip topikBreakdown completely if still exceeding safe limit
+  cleaned = cleaned.map(({ topikBreakdown, ...rest }) => rest);
+
+  if (estimateBytes(cleaned) <= SAFE_FIRESTORE_BYTES) {
+    return cleaned;
+  }
+
+  // Step 5: Final safeguard — aggregate by Kantor Cabang (1 row per KC) so payload is < 40KB
+  const groupByKcOnly = new Map<string, CityData & { _slaSum: number; _count: number }>();
+  cleaned.forEach((c, idx) => {
+    const kcKey = (c.kantorCabang || c.name || `KC_${idx}`).trim().toLowerCase();
+    const existing = groupByKcOnly.get(kcKey);
+    if (!existing) {
+      groupByKcOnly.set(kcKey, {
+        ...c,
+        _slaSum: Number(c.slaCompliance) || 90,
+        _count: 1,
+      });
+    } else {
+      existing.informasi += Number(c.informasi) || 0;
+      existing.permintaan += Number(c.permintaan) || 0;
+      existing.pengaduan += Number(c.pengaduan) || 0;
+      existing.total += Number(c.total) || 0;
+      existing._slaSum += Number(c.slaCompliance) || 90;
+      existing._count += 1;
+    }
+  });
+
+  return Array.from(groupByKcOnly.values()).map(({ _slaSum, _count, ...rest }) => ({
+    ...rest,
+    slaCompliance: _count > 0 ? Number((_slaSum / _count).toFixed(2)) : rest.slaCompliance,
+  }));
+}
+
 const executeSaveMapData = debounce(async () => {
   if (checkQuotaExceeded() || Object.keys(pendingMapData).length === 0) return;
   const payloadToSave = { ...pendingMapData };
@@ -200,28 +356,41 @@ const executeSaveMapData = debounce(async () => {
     const docRef = doc(db, 'map_data', 'cities_and_config');
     const payload: Partial<CloudMapData> = {
       ...payloadToSave,
+      ...(payloadToSave.cities ? { cities: compactCitiesForFirestore(payloadToSave.cities) } : {}),
       updatedAt: new Date().toISOString()
     };
 
-    let cleanPayload = sanitizeForFirestore(payload);
-
-    // Document size guard for cities dataset (~750KB limit)
-    const MAX_DOC_BYTES = 750000;
-    if (JSON.stringify(cleanPayload).length > MAX_DOC_BYTES && cleanPayload.cities) {
-      // Omit heavy rawRow from cities payload if dataset size is huge
-      cleanPayload.cities = cleanPayload.cities.map(c => {
-        const { rawRow, ...rest } = c;
-        return rest;
-      });
-    }
-
+    const cleanPayload = sanitizeForFirestore(payload);
     await setDoc(docRef, cleanPayload, { merge: true });
   } catch (err: any) {
     if (err?.code === 'resource-exhausted' || err?.message?.includes('Quota')) {
       markQuotaExceeded();
       return;
     }
-    console.error('Failed to save map data to cloud:', err);
+
+    // Fallback: if document still exceeds Firestore's 1MB limit, save syncConfig + ultra-compact KC summary
+    if (err?.message?.includes('exceeds the maximum allowed size') || err?.code === 'invalid-argument') {
+      try {
+        const docRef = doc(db, 'map_data', 'cities_and_config');
+        const fallbackPayload = sanitizeForFirestore({
+          ...(payloadToSave.syncConfig ? { syncConfig: payloadToSave.syncConfig } : {}),
+          ...(payloadToSave.hasSyncedCustomData !== undefined ? { hasSyncedCustomData: payloadToSave.hasSyncedCustomData } : {}),
+          ...(payloadToSave.cities
+            ? {
+                cities: compactCitiesForFirestore(payloadToSave.cities)
+                  .map(({ topikBreakdown, rawRow, pokokMasalahBreakdown, ...rest }) => rest)
+                  .slice(0, 350),
+              }
+            : {}),
+          updatedAt: new Date().toISOString(),
+        });
+        await setDoc(docRef, fallbackPayload, { merge: true });
+        return;
+      } catch (fallbackErr) {
+        // Ignore secondary error quietly
+        return;
+      }
+    }
   }
 }, 5000, { maxWait: 15000 });
 

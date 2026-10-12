@@ -264,7 +264,7 @@ async function startServer() {
   // Endpoint for SMS (Super Mind Senada) AI recommendations via Google Gemini
   app.post("/api/gemini/recommendations", async (req, res) => {
     try {
-      const { kantorCabang, kepwil, selectedBulan, selectedTopik, branchMetrics, citiesSummary } = req.body;
+      const { kantorCabang, kepwil, selectedBulan, selectedTopik, kategoriFocus, branchMetrics, citiesSummary } = req.body;
 
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
@@ -286,6 +286,21 @@ async function startServer() {
 
       const bm = branchMetrics || {};
       const targetName = kantorCabang || bm.branchName || 'Seluruh Kantor Cabang';
+
+      const topPengaduanList: Array<{
+        topikMasalah: string;
+        pokokMasalah: string;
+        jenisKategori: string;
+        count: number;
+      }> = Array.isArray(bm.topPengaduanList) ? bm.topPengaduanList.slice(0, 6) : [];
+
+      const topInformasiList: Array<{
+        topikMasalah: string;
+        pokokMasalah: string;
+        jenisKategori: string;
+        count: number;
+      }> = Array.isArray(bm.topInformasiList) ? bm.topInformasiList.slice(0, 6) : [];
+
       const topTopikList: Array<{
         topikMasalah: string;
         pokokMasalah: string;
@@ -294,55 +309,54 @@ async function startServer() {
         percentageOfTotal: number;
       }> = Array.isArray(bm.topTopikList) ? bm.topTopikList.slice(0, 10) : [];
 
+      const pengaduanFormatted = topPengaduanList.length > 0
+        ? topPengaduanList.map((t, idx) => `   ${idx + 1}. [PENGADUAN] "${t.topikMasalah}" (${t.pokokMasalah}) — ${t.count} tiket`).join("\n")
+        : "   1. [PENGADUAN] Keluhan Pelayanan Fasilitas Kesehatan (Pelayanan Kesehatan) — 35 tiket";
+
+      const informasiFormatted = topInformasiList.length > 0
+        ? topInformasiList.map((t, idx) => `   ${idx + 1}. [INFORMASI] "${t.topikMasalah}" (${t.pokokMasalah}) — ${t.count} tiket`).join("\n")
+        : "   1. [INFORMASI] Informasi Status Kepesertaan & Tagihan Iuran (Administrasi) — 85 tiket";
+
       const topTopikFormatted = topTopikList.length > 0
         ? topTopikList
             .map(
               (t, idx) =>
-                `   ${idx + 1}. Topik Masalah: "${t.topikMasalah}" | Pokok Masalah: ${t.pokokMasalah} | Kategori: ${t.jenisKategori} | Jumlah: ${t.count} tiket (${t.percentageOfTotal}%)`
+                `   ${idx + 1}. Topik Masalah: "${t.topikMasalah}" | Pokok Masalah: ${t.pokokMasalah} | Kategori: ${t.jenisKategori} | Jumlah: ${t.count} tiket`
             )
             .join("\n")
-        : "   1. Topik Masalah: Perubahan Data Peserta | Pokok Masalah: Administrasi | Kategori: Permintaan";
+        : "   1. Topik Masalah: Perubahan Data Peserta | Pokok Masalah: Administrasi | Kategori: Informasi";
 
-      const prompt = `Anda adalah konsultan manajemen strategis dan AI Layanan Publik profesional (Super Mind Senada - SMS).
-Tugas Anda adalah memberikan rekomendasi perbaikan dan strategi operasional yang MENGACU LANGSUNG PADA DATA GOOGLE SHEET BERDASARKAN TOPIK MASALAH BERIKUT:
+      const prompt = `Anda adalah konsultan manajemen layanan publik profesional pada sistem Super Mind Senada (SMS).
+Tugas Anda: Berdasarkan data Topik Masalah Pengaduan dan Informasi dari Google Sheet berikut, susun REKOMENDASI STRATEGI yang HANYA terdiri dari 2 Jangka Waktu:
+1. Jangka Pendek (1 - 3 Bulan)
+2. Jangka Menengah (4 - 6 Bulan)
+
+Buatkan KESIMPULAN pada setiap jangka waktu mengenai apa yang harus dilakukan beserta daftar AKSI YANG HARUS DILAKUKAN.
+TIDAK PERLU mencantumkan hasil analisa maupun target KPI.
 
 Target Kantor Cabang: ${targetName}
 KEPWIL: ${kepwil || bm.kepwilName || 'Semua'}
 Bulan/Periode: ${selectedBulan || 'Semua'}
-Fokus Filter Topik Masalah: ${selectedTopik && selectedTopik !== 'Semua' ? selectedTopik : 'Top 10 Topik Masalah Tertinggi'}
+Fokus Kategori: ${kategoriFocus || 'Semua (Pengaduan & Informasi)'}
+Fokus Filter Topik Masalah: ${selectedTopik && selectedTopik !== 'Semua' ? selectedTopik : 'Top Topik Masalah Pengaduan & Informasi'}
 
-DATA SINKRON GOOGLE SHEET KINERJA UNIT (${targetName}):
-1. Jumlah Layanan (Total): ${bm.totalLayanan || (citiesSummary?.totalInformasi + citiesSummary?.totalPermintaan + citiesSummary?.totalPengaduan) || 0} tiket
-2. Penyelesaian SLA: ${bm.slaCompliance || citiesSummary?.avgSla || 0}% Compliance (Rata-rata Durasi SLA: ${bm.avgSlaDays || 2.0} Hari)
-3. Rincian Jumlah Layanan per Jenis Kategori:
-   - Layanan Informasi: ${bm.informasi || citiesSummary?.totalInformasi || 0} tiket
-   - Layanan Permintaan: ${bm.permintaan || citiesSummary?.totalPermintaan || 0} tiket
-   - Layanan Pengaduan: ${bm.pengaduan || citiesSummary?.totalPengaduan || 0} tiket
-4. Rincian Pengelompokan Pokok Masalah:
-   - Pokok Masalah Administrasi: ${bm.administrasi || 0} tiket
-   - Pokok Masalah Iuran: ${bm.iuran || 0} tiket
-   - Pokok Masalah Pelayanan Kesehatan: ${bm.pelayananKesehatan || 0} tiket
-5. DAFTAR TOP TOPIK MASALAH DARI GOOGLE SHEET (ACUAN UTAMA REKOMENDASI):
+DATA SINKRON GOOGLE SHEET (${targetName}):
+1. TOP TOPIK MASALAH PENGADUAN:
+${pengaduanFormatted}
+2. TOP TOPIK MASALAH INFORMASI:
+${informasiFormatted}
+3. Gabungan Topik Masalah Utama:
 ${topTopikFormatted}
 
-PERINTAH KHUSUS KONTEN REKOMENDASI BERDASARKAN TOPIK MASALAH:
-- Setiap item rekomendasi WAJIB mengacu secara spesifik pada salah satu Topik Masalah dari daftar Google Sheet di atas (isi field topikMasalah, pokokMasalah, jenisKategori, dan topikCount sesuai data di atas).
-- Jika Fokus Filter Topik Masalah adalah "${selectedTopik && selectedTopik !== 'Semua' ? selectedTopik : 'Semua'}", prioritaskan pembahasan mendalam untuk topik masalah tersebut di seluruh tahap waktu dan aspek.
-- WAJIB menyebutkan nama Topik Masalah beserta angka jumlah tiketnya dari Google Sheet secara eksplisit pada Judul (title), Deskripsi (description), Target KPI (kpiTarget), dan Langkah Tindakan (actionSteps).
-- LANGKAH TINDAKAN OPERASIONAL (actionSteps) Harus SANGAT KONKRET, PRAKTIS, & SANGAT MUDAH DIPAHAMI:
-  * Tuliskan setiap instruksi tindakan dengan format perintah operasional langsung yang menyebutkan Topik Masalahnya (Contoh: "Briefing Pagi Jam 07:45: Evaluasi target penyelesaian tiket topik '${bm.dominantTopikMasalah || 'Perubahan Data Peserta'}'...", "Rotasi Jam Puncak 10:00-14:00: Tugaskan 2 verifikator khusus pokok masalah ${bm.dominantTopikPokok || 'Administrasi'}...", "Pasang QR Code Panduan Mandiri topik '${bm.dominantTopikMasalah || 'Perubahan Data Peserta'}' di ruang tunggu...").
-
-SYARAT WAJIB STRUKTUR OUTPUT:
-1. Rekomendasi dibagi menjadi 3 Tahap Waktu:
-   - Jangka Pendek (1 - 3 Bulan): Taktis, respon cepat penguraian antrean Topik Masalah tertinggi.
-   - Jangka Menengah (3 - 6 Bulan): Standardisasi SOP lintas bidang, upskilling petugas pada Topik Masalah dominan, sistem peringatan dini.
-   - Jangka Panjang (6 - 12+ Bulan): Pencegahan hulu (preventive action) dan otomatisasi penyelesaian mandiri berbasis Topik Masalah.
-2. Setiap Tahap Waktu WAJIB mencakup 3 Aspek Utama:
-   - People (aspect: "people", aspectLabel: "People")
-   - Proses (aspect: "proses", aspectLabel: "Proses")
-   - Tools (aspect: "tools", aspectLabel: "Tools")
-
-Hasilkan tepat 9 item rekomendasi (3 per Tahap Waktu: pendek, menengah, panjang; masing-masing mencakup aspek people, proses, dan tools).`;
+ATURAN PENULISAN (WAJIB DIPATUHI):
+- Gunakan bahasa yang sangat ringkas, jelas, dan langsung pada tindakan yang harus dilakukan.
+- Tidak perlu mencantumkan hasil analisa atau target capaian/KPI.
+- Hanya gunakan 2 nilai timeframe:
+  1) timeframe: "pendek", timeframeLabel: "Jangka Pendek (1 - 3 Bulan)"
+  2) timeframe: "menengah", timeframeLabel: "Jangka Menengah (4 - 6 Bulan)"
+- Isi kesimpulanPendek (kesimpulan singkat apa yang harus dilakukan pada Jangka Pendek 1 - 3 bulan) dan aksiUtamaPendek (3-4 poin aksi utama jangka pendek).
+- Isi kesimpulanMenengah (kesimpulan singkat apa yang harus dilakukan pada Jangka Menengah 4 - 6 bulan) dan aksiUtamaMenengah (3-4 poin aksi utama jangka menengah).
+- Hasilkan tepat 6 item rekomendasi pada array recommendations: 3 item untuk Jangka Pendek (1 - 3 Bulan) dan 3 item untuk Jangka Menengah (4 - 6 Bulan), masing-masing mencakup aspek people, proses, dan tools, dengan actionSteps berisi 3 aksi konkret yang harus dilakukan.`;
 
       const response = await ai.models.generateContent({
         model: "gemini-3.8-flash",
@@ -353,6 +367,16 @@ Hasilkan tepat 9 item rekomendasi (3 per Tahap Waktu: pendek, menengah, panjang;
             type: Type.OBJECT,
             properties: {
               summary: { type: Type.STRING },
+              kesimpulanPendek: { type: Type.STRING },
+              aksiUtamaPendek: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              kesimpulanMenengah: { type: Type.STRING },
+              aksiUtamaMenengah: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
               overallScore: { type: Type.NUMBER },
               healthStatus: { type: Type.STRING },
               recommendations: {
@@ -362,14 +386,12 @@ Hasilkan tepat 9 item rekomendasi (3 per Tahap Waktu: pendek, menengah, panjang;
                   properties: {
                     id: { type: Type.STRING },
                     title: { type: Type.STRING },
-                    description: { type: Type.STRING },
                     aspect: { type: Type.STRING },
                     aspectLabel: { type: Type.STRING },
                     timeframe: { type: Type.STRING },
                     timeframeLabel: { type: Type.STRING },
                     impactLevel: { type: Type.STRING },
                     targetBranch: { type: Type.STRING },
-                    kpiTarget: { type: Type.STRING },
                     topikMasalah: { type: Type.STRING },
                     pokokMasalah: { type: Type.STRING },
                     jenisKategori: { type: Type.STRING },
@@ -382,7 +404,6 @@ Hasilkan tepat 9 item rekomendasi (3 per Tahap Waktu: pendek, menengah, panjang;
                   required: [
                     "id",
                     "title",
-                    "description",
                     "aspect",
                     "aspectLabel",
                     "timeframe",
@@ -396,7 +417,16 @@ Hasilkan tepat 9 item rekomendasi (3 per Tahap Waktu: pendek, menengah, panjang;
                 }
               }
             },
-            required: ["summary", "overallScore", "healthStatus", "recommendations"]
+            required: [
+              "summary",
+              "kesimpulanPendek",
+              "aksiUtamaPendek",
+              "kesimpulanMenengah",
+              "aksiUtamaMenengah",
+              "overallScore",
+              "healthStatus",
+              "recommendations"
+            ]
           }
         }
       });

@@ -104,11 +104,11 @@ export interface MapSyncConfig {
 export interface StrategicRecommendationItem {
   id: string;
   title: string;
-  description: string;
+  description?: string;
   aspect: 'people' | 'proses' | 'tools';
   aspectLabel: 'People' | 'Proses' | 'Tools';
-  timeframe: 'pendek' | 'menengah' | 'panjang';
-  timeframeLabel: 'Jangka Pendek (1-3 Bulan)' | 'Jangka Menengah (3-6 Bulan)' | 'Jangka Panjang (6-12+ Bulan)';
+  timeframe: 'pendek' | 'menengah';
+  timeframeLabel: 'Jangka Pendek (1 - 3 Bulan)' | 'Jangka Menengah (4 - 6 Bulan)';
   impactLevel: 'Tinggi' | 'Sedang' | 'Kritis';
   targetBranch?: string;
   kpiTarget?: string;
@@ -121,6 +121,10 @@ export interface StrategicRecommendationItem {
 
 export interface SmsRecommendationResponse {
   summary: string;
+  kesimpulanPendek?: string;
+  aksiUtamaPendek?: string[];
+  kesimpulanMenengah?: string;
+  aksiUtamaMenengah?: string[];
   kantorCabangTarget: string;
   kepwilTarget?: string;
   overallScore: number;

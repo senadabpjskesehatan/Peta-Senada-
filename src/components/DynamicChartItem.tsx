@@ -346,7 +346,7 @@ export default function DynamicChartItem({
       const renderPieLabel = (entry: any) => {
         if (currentLabelMode === 'none') return false;
         const val = entry?.value;
-        const num = typeof val === 'number' ? val : parseNumericValue(val) || 0;
+        const num = Math.round(Number(typeof val === 'number' ? val : parseNumericValue(val) || 0));
         if (currentLabelMode === 'percent') {
           const pct = typeof entry?.percent === 'number' 
             ? entry.percent * 100 
@@ -359,8 +359,8 @@ export default function DynamicChartItem({
       return (
         <PieChart margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
           <Tooltip 
-            formatter={(val: any, name: any) => [`${Number(val).toLocaleString('id-ID')}`, String(name)]}
-            contentStyle={{ borderRadius: '12px', fontSize: '11px', fontWeight: 600, border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+            formatter={(val: any, name: any) => [`${Math.round(Number(val) || 0).toLocaleString('id-ID')}`, String(name)]}
+            contentStyle={{ borderRadius: '12px', fontSize: '13px', fontWeight: 700, border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
           />
           <Pie
             data={pieChartData}
@@ -378,7 +378,7 @@ export default function DynamicChartItem({
               <Cell key={`cell-${index}`} fill={SERIES_COLORS[index % SERIES_COLORS.length]} />
             ))}
           </Pie>
-          <Legend wrapperStyle={{ fontSize: '10px' }} />
+          <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 600 }} />
         </PieChart>
       );
     }
@@ -399,8 +399,8 @@ export default function DynamicChartItem({
       return (
         <div className="flex flex-col items-center justify-center h-[180px] text-slate-400 bg-slate-50 rounded-2xl border border-dashed border-slate-200 p-4">
           <AlertCircle className="h-8 w-8 text-amber-500 mb-2 animate-bounce" />
-          <p className="text-xs font-bold text-slate-650 text-center">Kolom Belum Dipilih</p>
-          <p className="text-[10px] text-slate-400 text-center mt-0.5">Silakan pilih minimal satu Sumbu X dan satu Sumbu Y di pengaturan.</p>
+          <p className="text-sm font-bold text-slate-700 text-center">Kolom Belum Dipilih</p>
+          <p className="text-xs text-slate-500 text-center mt-0.5">Silakan pilih minimal satu Sumbu X dan satu Sumbu Y di pengaturan.</p>
         </div>
       );
     }
@@ -443,14 +443,19 @@ export default function DynamicChartItem({
         const isAverageMetric = /sla|compliance|persen|percent|kepatuhan|rate|avg/i.test(yk);
         const count = item.counts[yk] || 1;
         const total = item.sums[yk] || 0;
-        row[yk] = isAverageMetric ? Number((total / count).toFixed(1)) : total;
+        row[yk] = isAverageMetric ? Number((total / count).toFixed(2)) : Math.round(total);
       });
       return row;
     });
 
     const formatDataLabel = (val: any, index?: any) => {
       if (currentLabelMode === 'none') return '';
-      const num = typeof val === 'number' ? val : parseNumericValue(val) || 0;
+      const rawNum = Number(typeof val === 'number' ? val : parseNumericValue(val) || 0);
+      const isSlaSeries = yKeys.length === 1 && /sla|compliance|persen|percent|kepatuhan/i.test(yKeys[0]);
+      if (isSlaSeries) {
+        return `${rawNum.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+      }
+      const num = Math.round(rawNum);
       if (currentLabelMode === 'percent') {
         const row = typeof index === 'number' ? formattedData[index] : (typeof index === 'object' && index?.payload ? index.payload : null);
         if (yKeys.length > 1 && row) {
@@ -477,19 +482,27 @@ export default function DynamicChartItem({
       if (active && payload && payload.length) {
         const item = payload[0];
         return (
-          <div className="bg-white border border-slate-200 p-2.5 rounded-xl text-[11px] shadow-lg text-slate-800 space-y-1">
-            <p className="font-bold text-slate-400 mb-1">{String(item.payload[effectiveXKey])}</p>
-            {payload.map((p: any) => (
-              <p key={p.dataKey} className="font-bold text-slate-700 flex items-center justify-between gap-3">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color || p.fill }}></span>
-                  {String(p.dataKey)}:
-                </span>
-                <span className="font-mono text-indigo-650 font-bold">
-                  {typeof p.value === 'number' ? p.value.toLocaleString('id-ID') : p.value}
-                </span>
-              </p>
-            ))}
+          <div className="bg-white border border-slate-200 p-3 rounded-xl text-xs sm:text-sm shadow-lg text-slate-800 space-y-1.5">
+            <p className="font-extrabold text-slate-600 mb-1">{String(item.payload[effectiveXKey])}</p>
+            {payload.map((p: any) => {
+              const isSlaKey = /sla|compliance|persen|percent|kepatuhan/i.test(String(p.dataKey));
+              const formattedVal = typeof p.value === 'number'
+                ? isSlaKey
+                  ? `${p.value.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
+                  : Math.round(p.value).toLocaleString('id-ID')
+                : p.value;
+              return (
+                <p key={p.dataKey} className="font-bold text-slate-700 flex items-center justify-between gap-4">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: p.color || p.fill }}></span>
+                    {String(p.dataKey)}:
+                  </span>
+                  <span className="tabular-nums text-indigo-700 font-black">
+                    {formattedVal}
+                  </span>
+                </p>
+              );
+            })}
           </div>
         );
       }
@@ -499,10 +512,10 @@ export default function DynamicChartItem({
     switch (chart.type) {
       case 'line':
         return (
-          <LineChart data={formattedData} margin={{ top: currentLabelMode !== 'none' ? 18 : 5, right: 10, left: -25, bottom: 5 }}>
+          <LineChart data={formattedData} margin={{ top: currentLabelMode !== 'none' ? 18 : 5, right: 10, left: -15, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-            <XAxis dataKey={effectiveXKey} stroke="#64748b" fontSize={10} tickLine={false} />
-            <YAxis stroke="#64748b" fontSize={10} tickLine={false} />
+            <XAxis dataKey={effectiveXKey} stroke="#64748b" fontSize={12} tickLine={false} />
+            <YAxis stroke="#64748b" fontSize={12} tickLine={false} />
             <Tooltip content={<CustomDynamicTooltip />} />
             {yKeys.map((yk, idx) => (
               <Line 
@@ -519,24 +532,24 @@ export default function DynamicChartItem({
                     dataKey={yk} 
                     position="top" 
                     offset={6} 
-                    fontSize={9} 
+                    fontSize={11} 
                     fill="#334155" 
-                    fontWeight={700} 
+                    fontWeight={800} 
                     formatter={formatDataLabel as any} 
                   />
                 )}
               </Line>
             ))}
-            {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />}
+            {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 600, paddingTop: '4px' }} />}
           </LineChart>
         );
 
       case 'bar':
         return (
-          <BarChart data={formattedData} margin={{ top: currentLabelMode !== 'none' ? 18 : 5, right: 10, left: -25, bottom: 5 }}>
+          <BarChart data={formattedData} margin={{ top: currentLabelMode !== 'none' ? 18 : 5, right: 10, left: -15, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-            <XAxis dataKey={effectiveXKey} stroke="#64748b" fontSize={10} tickLine={false} />
-            <YAxis stroke="#64748b" fontSize={10} tickLine={false} />
+            <XAxis dataKey={effectiveXKey} stroke="#64748b" fontSize={12} tickLine={false} />
+            <YAxis stroke="#64748b" fontSize={12} tickLine={false} />
             <Tooltip content={<CustomDynamicTooltip />} />
             {yKeys.map((yk, idx) => (
               <Bar 
@@ -551,24 +564,24 @@ export default function DynamicChartItem({
                     dataKey={yk} 
                     position="top" 
                     offset={4} 
-                    fontSize={9} 
+                    fontSize={11} 
                     fill="#334155" 
-                    fontWeight={700} 
+                    fontWeight={800} 
                     formatter={formatDataLabel as any} 
                   />
                 )}
               </Bar>
             ))}
-            {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />}
+            {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 600, paddingTop: '4px' }} />}
           </BarChart>
         );
 
       case 'area':
         return (
-          <AreaChart data={formattedData} margin={{ top: currentLabelMode !== 'none' ? 18 : 5, right: 10, left: -25, bottom: 5 }}>
+          <AreaChart data={formattedData} margin={{ top: currentLabelMode !== 'none' ? 18 : 5, right: 10, left: -15, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-            <XAxis dataKey={effectiveXKey} stroke="#64748b" fontSize={10} tickLine={false} />
-            <YAxis stroke="#64748b" fontSize={10} tickLine={false} />
+            <XAxis dataKey={effectiveXKey} stroke="#64748b" fontSize={12} tickLine={false} />
+            <YAxis stroke="#64748b" fontSize={12} tickLine={false} />
             <Tooltip content={<CustomDynamicTooltip />} />
             {yKeys.map((yk, idx) => {
               const color = SERIES_COLORS[idx % SERIES_COLORS.length];
@@ -587,16 +600,16 @@ export default function DynamicChartItem({
                       dataKey={yk} 
                       position="top" 
                       offset={6} 
-                      fontSize={9} 
+                      fontSize={11} 
                       fill="#334155" 
-                      fontWeight={700} 
+                      fontWeight={800} 
                       formatter={formatDataLabel as any} 
                     />
                   )}
                 </Area>
               );
             })}
-            {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />}
+            {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: '12px', fontWeight: 600, paddingTop: '4px' }} />}
           </AreaChart>
         );
 
@@ -609,17 +622,17 @@ export default function DynamicChartItem({
   const renderChartIcon = () => {
     const iconName = chart.icon || (chart.type === 'line' ? 'TrendingUp' : chart.type === 'bar' ? 'BarChart2' : chart.type === 'pie' ? 'PieIcon' : 'Layers');
     switch (iconName) {
-      case 'TrendingUp': return <TrendingUp className="text-indigo-600 h-4.5 w-4.5" />;
-      case 'BarChart2': return <BarChart2 className="text-teal-600 h-4.5 w-4.5" />;
-      case 'PieIcon': return <PieIcon className="text-amber-600 h-4.5 w-4.5" />;
-      case 'Layers': return <Layers className="text-purple-600 h-4.5 w-4.5" />;
-      case 'Shield': return <Shield className="text-emerald-600 h-4.5 w-4.5" />;
-      case 'Globe': return <Globe className="text-blue-600 h-4.5 w-4.5" />;
-      case 'Activity': return <Activity className="text-rose-600 h-4.5 w-4.5" />;
-      case 'Target': return <Target className="text-orange-600 h-4.5 w-4.5" />;
-      case 'Award': return <Award className="text-yellow-600 h-4.5 w-4.5" />;
-      case 'Zap': return <Zap className="text-amber-500 h-4.5 w-4.5" />;
-      default: return <BarChart2 className="text-slate-600 h-4.5 w-4.5" />;
+      case 'TrendingUp': return <TrendingUp className="text-indigo-600 h-5 w-5" />;
+      case 'BarChart2': return <BarChart2 className="text-teal-600 h-5 w-5" />;
+      case 'PieIcon': return <PieIcon className="text-amber-600 h-5 w-5" />;
+      case 'Layers': return <Layers className="text-purple-600 h-5 w-5" />;
+      case 'Shield': return <Shield className="text-emerald-600 h-5 w-5" />;
+      case 'Globe': return <Globe className="text-blue-600 h-5 w-5" />;
+      case 'Activity': return <Activity className="text-rose-600 h-5 w-5" />;
+      case 'Target': return <Target className="text-orange-600 h-5 w-5" />;
+      case 'Award': return <Award className="text-yellow-600 h-5 w-5" />;
+      case 'Zap': return <Zap className="text-amber-500 h-5 w-5" />;
+      default: return <BarChart2 className="text-slate-600 h-5 w-5" />;
     }
   };
 
@@ -636,12 +649,12 @@ export default function DynamicChartItem({
               type="text"
               value={chart.title}
               onChange={(e) => onUpdate(chart.id, { title: e.target.value })}
-              className="bg-transparent border-none text-slate-800 font-extrabold text-sm focus:bg-slate-50 px-2 py-1 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 w-full font-sans"
+              className="bg-transparent border-none text-slate-800 font-extrabold text-base sm:text-lg focus:bg-slate-50 px-2 py-1 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 w-full font-sans"
               placeholder="Judul Grafik Baru"
               id={`chart-title-input-${chart.id}`}
             />
           ) : (
-            <span className="font-extrabold text-slate-800 text-sm px-2 py-1 select-none" id={`chart-title-label-${chart.id}`}>
+            <span className="font-extrabold text-slate-800 text-base sm:text-lg px-2 py-1 select-none" id={`chart-title-label-${chart.id}`}>
               {chart.title}
             </span>
           )}
@@ -656,7 +669,7 @@ export default function DynamicChartItem({
                 title="Setelan grafik (Admin)"
                 id={`chart-settings-toggle-${chart.id}`}
               >
-                <Settings className="h-4 w-4" />
+                <Settings className="h-4.5 w-4.5" />
               </button>
               <button
                 onClick={() => onDelete(chart.id)}
@@ -664,13 +677,13 @@ export default function DynamicChartItem({
                 title="Hapus grafik (Admin)"
                 id={`chart-delete-button-${chart.id}`}
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="h-4.5 w-4.5" />
               </button>
             </>
           ) : (
             <button
               onClick={onRequestAdminLogin}
-              className="text-[10px] text-slate-400 hover:text-slate-600 font-semibold px-2 py-1 rounded-lg hover:bg-slate-100 transition-all cursor-pointer"
+              className="text-xs text-slate-500 hover:text-slate-700 font-bold px-2.5 py-1 rounded-lg hover:bg-slate-100 transition-all cursor-pointer"
               title="Mode Tamu (View Only) - Klik untuk Login Admin"
             >
               Mode Tamu (View Only)

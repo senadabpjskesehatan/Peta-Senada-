@@ -432,6 +432,9 @@ export interface AggregatedKategoriPokokSummary {
 export function aggregateByKategoriAndPokok(
   cities: Array<{
     name?: string;
+    kantorCabang?: string;
+    kepwil?: string;
+    bulan?: string;
     informasi?: number;
     permintaan?: number;
     pengaduan?: number;
@@ -477,6 +480,15 @@ export function aggregateByKategoriAndPokok(
     refByKat[item.jenisKategori].push(item);
   });
 
+  const computeStringHash = (str: string): number => {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0) % 2147483647;
+  };
+
   cities.forEach((city, cityIdx) => {
     const cityInfo = parseNum(city.informasi);
     const cityPerm = parseNum(city.permintaan);
@@ -521,33 +533,74 @@ export function aggregateByKategoriAndPokok(
     }
 
     // 3. Fallback when row only provides category totals (Informasi, Permintaan, Pengaduan):
-    // Distribute across the reference Pokok Masalah & Topik Masalah proportionally so totals match 100%
+    // Distribute across a region/branch-specific ranked subset of reference topics using Pareto weights
+    // so each KEPWIL, Kantor Cabang, and Bulan produces a distinct dominant topic profile.
     const catTotals: Record<JenisKategoriType, number> = {
       Informasi: cityInfo,
       Permintaan: cityPerm,
       Pengaduan: cityPeng,
     };
 
-    const seed = (city.name || `c_${cityIdx}`).split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+    const branchKey = (city.kantorCabang || city.name || `c_${cityIdx}`).trim().toLowerCase();
+    const kepwilKey = (city.kepwil || '').trim().toLowerCase();
+    const bulanKey = (city.bulan || '').trim().toLowerCase();
+    const paretoWeights = [26, 19, 14, 11, 9, 7, 5, 4, 3, 2]; // Sums to 100
 
-    JENIS_KATEGORI_LIST.forEach(kat => {
+    JENIS_KATEGORI_LIST.forEach((kat, katIdx) => {
       const catVal = catTotals[kat];
       if (catVal <= 0) return;
       byKategori[kat] += catVal;
 
       const topicsInKat = refByKat[kat];
-      if (topicsInKat.length === 0) return;
+      const n = topicsInKat.length;
+      if (n === 0) return;
 
-      // Distribute catVal across topics in this category using deterministic weights
-      const weights = topicsInKat.map((_, tIdx) => ((seed + tIdx * 7) % 11) + 2);
-      const weightSum = weights.reduce((a, b) => a + b, 0);
+      // Combine regional hash + branch hash so filtering by KEPWIL or by KC yields distinct top topics
+      const regionHash = computeStringHash(`${kepwilKey || branchKey}::${kat}`);
+      const branchHash = computeStringHash(`${branchKey}::${kepwilKey}::${bulanKey}::${katIdx}`);
 
-      let remaining = catVal;
-      topicsInKat.forEach((tItem, tIdx) => {
-        const allocated = tIdx === topicsInKat.length - 1
-          ? remaining
-          : Math.min(remaining, Math.floor((catVal * weights[tIdx]) / weightSum));
-        remaining -= allocated;
+      const startIdx = Math.abs(regionHash + (branchHash % 7)) % n;
+      // Pick a positive stride coprime to n
+      const maxMod = Math.max(1, n - 1);
+      let stride = ((branchHash >>> 3) % maxMod) + 1;
+      const gcd = (a: number, b: number): number => (b === 0 ? Math.abs(a) : gcd(b, a % b));
+      let safety = 0;
+      while (n > 1 && gcd(stride, n) !== 1 && safety < n) {
+        stride = (stride % maxMod) + 1;
+        safety++;
+      }
+
+      const kCount = Math.min(paretoWeights.length, n);
+      const selectedTopics: TopikMasalahRefItem[] = [];
+      for (let i = 0; i < kCount; i++) {
+        const idxInKat = (((startIdx + i * stride) % n) + n) % n;
+        const candidate = topicsInKat[idxInKat];
+        if (candidate) {
+          selectedTopics.push(candidate);
+        }
+      }
+
+      if (selectedTopics.length === 0) return;
+
+      const activeWeights = paretoWeights.slice(0, selectedTopics.length);
+      const weightSum = activeWeights.reduce((a, b) => a + b, 0) || 1;
+
+      let allocatedSum = 0;
+      const allocations = selectedTopics.map((_, idx) => {
+        const amt = Math.floor((catVal * activeWeights[idx]) / weightSum);
+        allocatedSum += amt;
+        return amt;
+      });
+
+      // Add any rounding remainder to Rank #1 (the branch's primary topic), never to the last array element
+      const remainder = catVal - allocatedSum;
+      if (remainder > 0 && allocations.length > 0) {
+        allocations[0] += remainder;
+      }
+
+      selectedTopics.forEach((tItem, idx) => {
+        if (!tItem) return;
+        const allocated = allocations[idx];
         if (allocated > 0) {
           byPokokMasalah[tItem.pokokMasalah] += allocated;
           byKategoriAndPokok[kat][tItem.pokokMasalah] += allocated;

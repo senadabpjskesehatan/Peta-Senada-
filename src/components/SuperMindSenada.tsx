@@ -48,7 +48,11 @@ export default function SuperMindSenada({
   citiesData,
   selectedBulan,
   selectedKepwil,
+  onSelectedKepwilChange,
   selectedKantorCabang,
+  onSelectedKantorCabangChange,
+  availableKepwilList,
+  availableKantorCabangList,
 }: SuperMindSenadaProps) {
   const [loading, setLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -104,20 +108,20 @@ export default function SuperMindSenada({
 
   // Active Branch Metrics calculated directly from synchronized dataset & Topik Masalah reference
   const activeBranchMetrics = useMemo(() => {
-    return extractBranchMetrics(selectedKantorCabang, selectedKepwil, citiesData);
-  }, [selectedKantorCabang, selectedKepwil, citiesData]);
+    return extractBranchMetrics(selectedKantorCabang, selectedKepwil, citiesData, selectedBulan);
+  }, [selectedKantorCabang, selectedKepwil, citiesData, selectedBulan]);
 
   // Initial recommendation state loaded with fallback grounded on Topik Masalah Pengaduan & Informasi
   const [recommendationData, setRecommendationData] = useState<SmsRecommendationResponse>(() => {
-    return generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, 'Semua', 'Semua');
+    return generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, 'Semua', 'Semua', selectedBulan);
   });
 
-  // Re-generate or sync fallback when selected branch, kategoriFocus, or topik filter changes locally
+  // Re-generate or sync fallback when selected branch, wilayah, bulan, kategoriFocus, or topik filter changes
   useEffect(() => {
     setRecommendationData(
-      generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus)
+      generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus, selectedBulan)
     );
-  }, [selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus]);
+  }, [selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus, selectedBulan]);
 
   // Fetch AI Recommendations from Server Route using Gemini
   const handleGenerateAiRecommendations = async () => {
@@ -145,7 +149,7 @@ export default function SuperMindSenada({
 
       const result = await response.json();
       if (result.success && result.data) {
-        const fallback = generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus);
+        const fallback = generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus, selectedBulan);
         setRecommendationData({
           summary:
             result.data.summary ||
@@ -164,13 +168,13 @@ export default function SuperMindSenada({
         });
       } else {
         setRecommendationData(
-          generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus)
+          generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus, selectedBulan)
         );
       }
     } catch (err) {
       console.warn('Fallback to local algorithm due to server response:', err);
       setRecommendationData(
-        generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus)
+        generateFallbackRecommendations(selectedKantorCabang, selectedKepwil, citiesData, selectedTopikFilter, kategoriFocus, selectedBulan)
       );
     } finally {
       setLoading(false);
@@ -384,18 +388,12 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                 </div>
                 <div>
                   <span className="text-xs font-extrabold uppercase tracking-wider text-rose-700 block">
-                    Fokus 1: Perbaikan Mutu Layanan &amp; Kepuasan Peserta
+                    Fokus 1: Perbaikan Mutu Layanan &amp; Kepuasan Peserta — {activeBranchMetrics.unitDisplayName}
                   </span>
                   <h3 className="text-lg sm:text-xl font-black text-slate-900">
                     Rekomendasi Perbaikan Topik Pengaduan
                   </h3>
                 </div>
-              </div>
-              <div className="text-right shrink-0 bg-rose-50 border border-rose-200 px-3.5 py-1.5 rounded-xl">
-                <span className="block text-xs font-bold text-rose-700 uppercase">Total Pengaduan</span>
-                <span className="block text-xl sm:text-2xl font-black text-rose-700 tabular-nums">
-                  {Number(activeBranchMetrics.pengaduan).toLocaleString('id-ID')}
-                </span>
               </div>
             </div>
 
@@ -448,18 +446,12 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                 </div>
                 <div>
                   <span className="text-xs font-extrabold uppercase tracking-wider text-sky-700 block">
-                    Fokus 2: Peningkatan Pemahaman &amp; Kepuasan Peserta
+                    Fokus 2: Peningkatan Pemahaman &amp; Kepuasan Peserta — {activeBranchMetrics.unitDisplayName}
                   </span>
                   <h3 className="text-lg sm:text-xl font-black text-slate-900">
                     Rekomendasi Perbaikan Topik Informasi
                   </h3>
                 </div>
-              </div>
-              <div className="text-right shrink-0 bg-sky-50 border border-sky-200 px-3.5 py-1.5 rounded-xl">
-                <span className="block text-xs font-bold text-sky-700 uppercase">Total Informasi</span>
-                <span className="block text-xl sm:text-2xl font-black text-sky-700 tabular-nums">
-                  {Number(activeBranchMetrics.informasi).toLocaleString('id-ID')}
-                </span>
               </div>
             </div>
 
@@ -519,9 +511,12 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-sm md:text-base font-black text-slate-800">
-                  Filter Fokus Analisa, Tahap Waktu &amp; Aspek
+                  Filter Wilayah, Daerah, Fokus Analisa &amp; Aspek
                 </h3>
-                <div className="hidden sm:flex items-center gap-1.5 text-xs">
+                <div className="hidden sm:flex items-center gap-1.5 text-xs flex-wrap">
+                  <span className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-2.5 py-0.5 rounded-md font-bold">
+                    Unit: {activeBranchMetrics.unitDisplayName}
+                  </span>
                   <span className="bg-indigo-50 border border-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded-md font-bold">
                     Fokus: {kategoriFocus}
                   </span>
@@ -549,6 +544,50 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
 
         {isFilterExpanded && (
           <div className="pt-3 border-t border-slate-100 space-y-4 animate-fadeIn">
+            {/* WILAYAH (KEPWIL) & DAERAH (KANTOR CABANG) SELECTORS */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-3 border-b border-slate-100">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <Landmark className="w-3.5 h-3.5 text-emerald-600" />
+                  Filter Wilayah (KEPWIL)
+                </label>
+                <select
+                  value={Array.isArray(selectedKepwil) ? (selectedKepwil[0] || 'Semua') : (selectedKepwil || 'Semua')}
+                  onChange={e => {
+                    onSelectedKepwilChange(e.target.value);
+                    onSelectedKantorCabangChange('Semua');
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="Semua">Semua Wilayah (Nasional)</option>
+                  {availableKepwilList.map(kw => (
+                    <option key={kw} value={kw}>
+                      {kw}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-blue-600" />
+                  Filter Daerah / Kantor Cabang
+                </label>
+                <select
+                  value={Array.isArray(selectedKantorCabang) ? (selectedKantorCabang[0] || 'Semua') : (selectedKantorCabang || 'Semua')}
+                  onChange={e => onSelectedKantorCabangChange(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="Semua">Semua Daerah / Kantor Cabang</option>
+                  {availableKantorCabangList.map(kc => (
+                    <option key={kc} value={kc}>
+                      {kc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               {/* 1. FOKUS KATEGORI ANALISA */}
               <div className="space-y-1.5">

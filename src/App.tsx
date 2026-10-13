@@ -38,7 +38,7 @@ import {
   KeyRound
 } from 'lucide-react';
 
-import { CityData, Ticket, MonthlyPerformance, DynamicChart, MapSyncConfig, FilterReference, AppUser } from './types';
+import { CityData, Ticket, MonthlyPerformance, DynamicChart, MapSyncConfig, FilterReference, AppUser, UnitUtilizationSummary, UserActivityLog } from './types';
 import SearchableFilterSelect from './components/SearchableFilterSelect';
 import { computeFilterOptions } from './utils/filterOptions';
 import { DEFAULT_CITIES, DEFAULT_TICKETS, MONTHLY_PERFORMANCE, DEFAULT_CHARTS, SAMPLE_SHEETS_CSV, findCityCoordinates, getKepwilForCity } from './data/defaultData';
@@ -46,7 +46,15 @@ import { parseNumericValue, fetchSheetData, parseCSV } from './utils/sheetParser
 import { isBulanMatching, isKepwilMatching, isKantorCabangMatching, parseMonthValue, parseFilterValueList } from './utils/monthHelper';
 import { extractTopikAndPokokFromRow } from './data/topikMasalahReference';
 import SuperMindSenada from './components/SuperMindSenada';
+import UserUtilizationAnalytics from './components/UserUtilizationAnalytics';
 import { getUserDefaultFilters, getUserDefaultScopeLabel, getUserOfficeOrWilayahLabel } from './utils/userFilterHelper';
+import {
+  recordUserLogin,
+  recordMenuUsage,
+  subscribeToUserActivity,
+  getUtilizationSummaries,
+  getRecentActivityLogs,
+} from './lib/activityTracker';
 import {
   subscribeToAppSettings,
   subscribeToMapData,
@@ -198,7 +206,18 @@ export default function App() {
     };
   });
 
-  const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts' | 'sms' | 'reporting' | 'users'>('map');
+  const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts' | 'sms' | 'reporting' | 'users' | 'pemanfaatan'>('map');
+  const [activitySummaries, setActivitySummaries] = useState<UnitUtilizationSummary[]>(() => getUtilizationSummaries());
+  const [activityLogs, setActivityLogs] = useState<UserActivityLog[]>(() => getRecentActivityLogs());
+
+  useEffect(() => {
+    const unsub = subscribeToUserActivity((data) => {
+      setActivitySummaries(data.summaries);
+      setActivityLogs(data.logs);
+    });
+    return () => unsub();
+  }, []);
+
   const [isGlobalFilterExpanded, setIsGlobalFilterExpanded] = useState<boolean>(false);
   const [showCopyNotification, setShowCopyNotification] = useState(false);
   const [showCopyDialog, setShowCopyDialog] = useState<string | null>(null);
@@ -232,13 +251,13 @@ export default function App() {
     saveUsersToCloud(newUsers);
   };
 
-  // Current logged in user info
+  // Current logged in user info (stored in sessionStorage so closing the tab/window logs out)
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
     try {
-      const saved = localStorage.getItem('app_current_user');
+      const saved = sessionStorage.getItem('app_current_user');
       if (saved) return JSON.parse(saved);
     } catch (e) {}
-    if (localStorage.getItem('is_admin_logged_in') === 'true') {
+    if (sessionStorage.getItem('is_admin_logged_in') === 'true') {
       return {
         id: 'user_admin_senada',
         username: 'senada',
@@ -250,16 +269,54 @@ export default function App() {
     return null;
   });
 
-  // Application Login State (User must login on initial page to see the overall dashboard view)
+  // Application Login State
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
-    return localStorage.getItem('app_is_logged_in') === 'true';
+    return sessionStorage.getItem('app_is_logged_in') === 'true';
   });
 
-  // Authentication & Guest / Admin Mode state (Default: Guest / Mode Tamu unless previously logged in as admin)
+  // Authentication & Guest / Admin Mode state
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
-    return localStorage.getItem('is_admin_logged_in') === 'true';
+    return sessionStorage.getItem('is_admin_logged_in') === 'true';
   });
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+
+  // Idle timeout (30 minutes) & session management
+  useEffect(() => {
+    if (!isLoggedIn) return;
+
+    if (!sessionStorage.getItem('session_last_activity')) {
+      sessionStorage.setItem('session_last_activity', Date.now().toString());
+    }
+
+    const updateActivity = () => {
+      sessionStorage.setItem('session_last_activity', Date.now().toString());
+    };
+
+    const events = ['mousemove', 'mousedown', 'keypress', 'touchstart', 'scroll', 'click'];
+    events.forEach(event => {
+      window.addEventListener(event, updateActivity);
+    });
+
+    const checkInterval = setInterval(() => {
+      const lastAct = sessionStorage.getItem('session_last_activity');
+      if (lastAct) {
+        const elapsed = Date.now() - parseInt(lastAct, 10);
+        const TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+        if (elapsed > TIMEOUT_MS) {
+          handleAppLogout();
+          setSyncStatusToast('Sesi Anda telah berakhir karena tidak ada aktivitas selama 30 menit. Silakan login kembali.');
+          setTimeout(() => setSyncStatusToast(null), 6000);
+        }
+      }
+    }, 15000);
+
+    return () => {
+      events.forEach(event => {
+        window.removeEventListener(event, updateActivity);
+      });
+      clearInterval(checkInterval);
+    };
+  }, [isLoggedIn]);
 
   // 3 Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang - supports multi-select checklist)
   const [selectedBulan, setSelectedBulan] = useState<string | string[]>('Semua');
@@ -267,21 +324,37 @@ export default function App() {
   const [selectedKantorCabang, setSelectedKantorCabang] = useState<string | string[]>('Semua');
   const hasInitializedUserDefault = useRef(false);
 
-  // Enforce access control for User Kepwil & Kantor Cabang (allowed 'map', 'custom-charts' (OVERVIEW), and 'sms')
+  // Enforce access control for User Kepwil & Kantor Cabang (allowed 'map', 'custom-charts' (OVERVIEW), 'sms', and 'pemanfaatan')
   useEffect(() => {
-    if (isLoggedIn && !isAdmin && activeMainTab !== 'map' && activeMainTab !== 'custom-charts' && activeMainTab !== 'sms') {
+    if (isLoggedIn && !isAdmin && activeMainTab !== 'map' && activeMainTab !== 'custom-charts' && activeMainTab !== 'sms' && activeMainTab !== 'pemanfaatan') {
       setActiveMainTab('map');
     }
   }, [isLoggedIn, isAdmin, activeMainTab]);
+
+  // Track menu utilization when user switches tabs
+  useEffect(() => {
+    if (isLoggedIn && currentUser) {
+      recordMenuUsage(currentUser, activeMainTab);
+    }
+  }, [activeMainTab, isLoggedIn, currentUser]);
 
   const handleAppLoginSuccess = (user: AppUser) => {
     setCurrentUser(user);
     setIsLoggedIn(true);
     const isAdm = user.role === 'admin';
     setIsAdmin(isAdm);
-    localStorage.setItem('app_is_logged_in', 'true');
-    localStorage.setItem('is_admin_logged_in', isAdm ? 'true' : 'false');
-    localStorage.setItem('app_current_user', JSON.stringify(user));
+    sessionStorage.setItem('app_is_logged_in', 'true');
+    sessionStorage.setItem('is_admin_logged_in', isAdm ? 'true' : 'false');
+    sessionStorage.setItem('app_current_user', JSON.stringify(user));
+    sessionStorage.setItem('session_last_activity', Date.now().toString());
+
+    // Clean up any old localStorage login keys
+    localStorage.removeItem('app_is_logged_in');
+    localStorage.removeItem('is_admin_logged_in');
+    localStorage.removeItem('app_current_user');
+
+    // Record login activity in tracker
+    recordUserLogin(user);
 
     // Resolve full filter options to apply default data based on user role (Kepwil or Kantor Cabang)
     const allOpts = computeFilterOptions(citiesData, [], mapSyncConfig, 'Semua', 'Semua');
@@ -304,7 +377,7 @@ export default function App() {
       setSyncStatusToast(`Berhasil Login sebagai User Kantor Cabang (${user.username}) - Menampilkan Data Default: ${user.displayName || user.username}`);
     }
 
-    if (!isAdm && activeMainTab !== 'map' && activeMainTab !== 'custom-charts' && activeMainTab !== 'sms') {
+    if (!isAdm && activeMainTab !== 'map' && activeMainTab !== 'custom-charts' && activeMainTab !== 'sms' && activeMainTab !== 'pemanfaatan') {
       setActiveMainTab('map');
     }
     setTimeout(() => setSyncStatusToast(null), 4000);
@@ -318,6 +391,10 @@ export default function App() {
     setSelectedBulan('Semua');
     setSelectedKepwil('Semua');
     setSelectedKantorCabang('Semua');
+    sessionStorage.removeItem('app_is_logged_in');
+    sessionStorage.removeItem('is_admin_logged_in');
+    sessionStorage.removeItem('app_current_user');
+    sessionStorage.removeItem('session_last_activity');
     localStorage.removeItem('app_is_logged_in');
     localStorage.removeItem('is_admin_logged_in');
     localStorage.removeItem('app_current_user');
@@ -331,15 +408,18 @@ export default function App() {
     setSelectedBulan('Semua');
     setSelectedKepwil('Semua');
     setSelectedKantorCabang('Semua');
-    localStorage.setItem('is_admin_logged_in', 'true');
-    localStorage.setItem('app_current_user', JSON.stringify(user));
+    sessionStorage.setItem('is_admin_logged_in', 'true');
+    sessionStorage.setItem('app_current_user', JSON.stringify(user));
+    sessionStorage.setItem('session_last_activity', Date.now().toString());
+    // Record admin login in tracker
+    recordUserLogin(user);
     setSyncStatusToast(`Berhasil Login sebagai Administrator (${user.username}) - Data Nasional`);
     setTimeout(() => setSyncStatusToast(null), 3000);
   };
 
   const handleAdminLogout = () => {
     setIsAdmin(false);
-    localStorage.removeItem('is_admin_logged_in');
+    sessionStorage.removeItem('is_admin_logged_in');
     setSyncStatusToast('Beralih ke Mode Pengguna');
     setTimeout(() => setSyncStatusToast(null), 3000);
   };
@@ -1118,13 +1198,16 @@ export default function App() {
   const accessibleNavTabs = (() => {
     if (isAdmin) {
       const base = navOrder.filter(k => k !== 'analytics' && k !== 'tickets' && k !== 'referensi' && k !== 'laporan' && k !== 'reporting');
+      if (!base.includes('pemanfaatan')) {
+        base.push('pemanfaatan');
+      }
       if (!base.includes('users')) {
         base.push('users');
       }
       return base;
     }
-    // User Kepwil and User Kantor Cabang can access 'map', 'custom-charts' (OVERVIEW), and 'sms'
-    return ['map', 'custom-charts', 'sms'];
+    // User Kepwil and User Kantor Cabang can access 'map', 'custom-charts' (OVERVIEW), 'sms', and 'pemanfaatan'
+    return ['map', 'custom-charts', 'sms', 'pemanfaatan'];
   })();
 
   return (
@@ -1143,6 +1226,7 @@ export default function App() {
             const isSms = tabKey === 'sms';
             const isReporting = tabKey === 'reporting';
             const isUsers = tabKey === 'users';
+            const isPemanfaatan = tabKey === 'pemanfaatan';
             const isActive = activeMainTab === tabKey;
             const label = isMap 
               ? 'PETA NASIONAL' 
@@ -1154,6 +1238,8 @@ export default function App() {
               ? 'REPORTING'
               : isUsers
               ? 'MANAJEMEN USER'
+              : isPemanfaatan
+              ? 'PEMANFAATAN USER'
               : 'OVERVIEW';
 
             return (
@@ -1167,6 +1253,8 @@ export default function App() {
                       ? 'bg-emerald-600/25 text-emerald-300 font-medium border border-emerald-500/40'
                       : isUsers
                       ? 'bg-blue-600/25 text-blue-300 font-medium border border-blue-500/40'
+                      : isPemanfaatan
+                      ? 'bg-amber-600/25 text-amber-300 font-medium border border-amber-500/40'
                       : 'bg-blue-600/20 text-blue-400 font-medium'
                     : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
@@ -1182,6 +1270,8 @@ export default function App() {
                     <Table2 className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-400' : 'text-slate-500'}`} />
                   ) : isUsers ? (
                     <Users className={`w-5 h-5 shrink-0 ${isActive ? 'text-blue-400' : 'text-slate-500'}`} />
+                  ) : isPemanfaatan ? (
+                    <Award className={`w-5 h-5 shrink-0 ${isActive ? 'text-amber-400' : 'text-slate-500'}`} />
                   ) : (
                     <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isActive ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
                   )}
@@ -1189,6 +1279,11 @@ export default function App() {
                   {isUsers && (
                     <span className="text-[10px] bg-blue-500/25 text-blue-300 font-extrabold px-1.5 py-0.5 rounded ml-auto">
                       Admin
+                    </span>
+                  )}
+                  {isPemanfaatan && (
+                    <span className="text-[10px] bg-amber-500/25 text-amber-300 font-extrabold px-1.5 py-0.5 rounded ml-auto">
+                      Top 5
                     </span>
                   )}
                 </button>
@@ -1312,18 +1407,13 @@ export default function App() {
                activeMainTab === 'sms' ? 'SMS (Super Mind Senada) - Rekomendasi Strategis AI' :
                activeMainTab === 'reporting' ? 'REPORTING - PIVOT TABLE EXCEL' :
                activeMainTab === 'users' ? 'MANAJEMEN USER & HAK AKSES' :
+               activeMainTab === 'pemanfaatan' ? 'PEMANFAATAN APLIKASI KEPWIL & KANTOR CABANG' :
                'Visualisasi Grafik Kustom Dinamis'}
             </h2>
             <span className="hidden sm:inline-block text-slate-300">|</span>
-            <span className="hidden sm:inline-block text-xs sm:text-sm font-semibold text-slate-500">WIB / WITA / WIT</span>
           </div>
           
           <div className="flex items-center space-x-2.5">
-            {syncStatusToast && (
-              <span className="text-xs bg-slate-800 text-white px-3.5 py-1.5 rounded-xl shadow-sm font-bold animate-fade-in hidden xl:inline-block">
-                {syncStatusToast}
-              </span>
-            )}
 
             <div className="hidden bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-emerald-200 items-center shrink-0 shadow-3xs" title="Cloud Database Firestore terhubung secara live. Data & setting admin tersimpan dan tersinkronisasi di semua perangkat, jaringan & mode tamu.">
               <Database className="w-3.5 h-3.5 text-emerald-600 mr-1.5 shrink-0" />
@@ -1563,7 +1653,7 @@ export default function App() {
         <div className="p-6 space-y-6 flex-1 overflow-y-auto" id="dashboard-main-content">
           
           {/* ACTIVE FILTER INDICATOR BANNER */}
-          {activeMainTab !== 'reporting' && (parseFilterValueList(selectedBulan).length > 0 || parseFilterValueList(selectedKepwil).length > 0 || parseFilterValueList(selectedKantorCabang).length > 0) && (
+          {activeMainTab !== 'reporting' && activeMainTab !== 'pemanfaatan' && (parseFilterValueList(selectedBulan).length > 0 || parseFilterValueList(selectedKepwil).length > 0 || parseFilterValueList(selectedKantorCabang).length > 0) && (
             <div className="bg-indigo-50/90 border border-indigo-200 rounded-2xl p-3.5 px-4 flex flex-wrap items-center justify-between gap-3 text-sm animate-fadeIn shadow-3xs">
               <div className="flex items-center gap-2.5 flex-wrap">
                 <span className="font-extrabold text-indigo-950 flex items-center gap-1.5">
@@ -1611,7 +1701,7 @@ export default function App() {
           )}
 
           {/* GLOBAL FILTER BAR FOR OTHER PAGES (ANALYTICS, TICKETS, CUSTOM CHARTS) */}
-          {activeMainTab !== 'map' && activeMainTab !== 'referensi' && activeMainTab !== 'reporting' && activeMainTab !== 'users' && (
+          {activeMainTab !== 'map' && activeMainTab !== 'referensi' && activeMainTab !== 'reporting' && activeMainTab !== 'users' && activeMainTab !== 'pemanfaatan' && (
             <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3.5 animate-fadeIn transition-all">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
@@ -1716,7 +1806,7 @@ export default function App() {
           )}
 
           {/* 4-COLUMN SUMMARY METRIC GRID ACCORDING TO EXCEL DATA */}
-          {activeMainTab !== 'reporting' && activeMainTab !== 'users' && (
+          {activeMainTab !== 'reporting' && activeMainTab !== 'users' && activeMainTab !== 'pemanfaatan' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
               
               {/* 1. TOTAL TIKET */}
@@ -2025,13 +2115,34 @@ export default function App() {
                 />
               </div>
             )}
+
+            {/* VIEW 9: PEMANFAATAN SISTEM KEPWIL & KANTOR CABANG */}
+            {activeMainTab === 'pemanfaatan' && (
+              <div className="animate-fadeIn">
+                <UserUtilizationAnalytics
+                  summaries={activitySummaries}
+                  logs={activityLogs}
+                  currentUser={currentUser}
+                  onRefresh={() => {
+                    setActivitySummaries(getUtilizationSummaries());
+                    setActivityLogs(getRecentActivityLogs());
+                    setSyncStatusToast('Data pemanfaatan berhasil disinkronkan');
+                    setTimeout(() => setSyncStatusToast(null), 2500);
+                  }}
+                  onNavigateMenu={(menuId) => {
+                    if (isAdmin || menuId === 'map' || menuId === 'custom-charts' || menuId === 'sms' || menuId === 'pemanfaatan') {
+                      setActiveMainTab(menuId as any);
+                    }
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {/* FOOTER COLOFON */}
           <footer className="mt-8 border-t border-slate-200 pt-6 text-center text-xs text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-4">
             <p>© 2026 SIPL Monitor - Sistem Informasi & SLA Terpadu. All rights reserved.</p>
             <p className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
               Live Data Engine Running (v4.2.0)
             </p>
           </footer>

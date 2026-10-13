@@ -18,6 +18,7 @@ import { parseNumericValue } from '../utils/sheetParser';
 import { aggregateByKategoriAndPokok } from '../data/topikMasalahReference';
 import { SenadaLogo } from './SenadaLogo';
 import { DEFAULT_USERS } from '../lib/firebase';
+import { getUtilizationSummaries, getRecentActivityLogs } from '../lib/activityTracker';
 
 interface InitialLoginPageProps {
   citiesData: CityData[];
@@ -31,6 +32,56 @@ export default function InitialLoginPage({ citiesData, users, onLoginSuccess }: 
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedMonthFilter, setSelectedMonthFilter] = useState<string>('Semua');
+  const logs = useMemo(() => getRecentActivityLogs(), []);
+
+  const monthMap: Record<string, number> = {
+    'Januari': 0, 'Februari': 1, 'Maret': 2, 'April': 3, 'Mei': 4, 'Juni': 5,
+    'Juli': 6, 'Agustus': 7, 'September': 8, 'Oktober': 9, 'November': 10, 'Desember': 11
+  };
+
+  const loginTop5List = useMemo(() => {
+    const summaries = getUtilizationSummaries();
+    if (selectedMonthFilter === 'Semua') {
+      const sorted = [...summaries].sort((a, b) => b.totalPemanfaatan - a.totalPemanfaatan);
+      return sorted.slice(0, 5);
+    } else {
+      const targetMonthIndex = monthMap[selectedMonthFilter];
+      const countsMap = new Map<string, { logins: number; menus: number; unit: any }>();
+      
+      summaries.forEach(s => {
+        countsMap.set(s.unitId, { logins: 0, menus: 0, unit: s });
+      });
+
+      logs.forEach(l => {
+        const d = new Date(l.timestamp);
+        if (d.getMonth() === targetMonthIndex) {
+          let entry = countsMap.get(l.userId);
+          if (!entry) {
+            const foundSummary = summaries.find(s => s.username === l.username || s.unitId === l.userId);
+            if (foundSummary) {
+              entry = { logins: 0, menus: 0, unit: foundSummary };
+              countsMap.set(foundSummary.unitId, entry);
+            }
+          }
+          if (entry) {
+            if (l.type === 'login') entry.logins += 1;
+            else if (l.type === 'menu_usage') entry.menus += 1;
+          }
+        }
+      });
+
+      const computed = Array.from(countsMap.values()).map(e => ({
+        ...e.unit,
+        loginCount: e.logins,
+        menuUsageCount: e.menus,
+        totalPemanfaatan: e.logins + e.menus,
+      }));
+
+      computed.sort((a, b) => b.totalPemanfaatan - a.totalPemanfaatan);
+      return computed.slice(0, 5);
+    }
+  }, [selectedMonthFilter, logs]);
 
   // Full summary of topics directly aggregated from citiesData for exact metrics
   const fullSummary = useMemo(() => {
@@ -278,10 +329,88 @@ export default function InitialLoginPage({ citiesData, users, onLoginSuccess }: 
 
         </section>
 
-        {/* Container Form Login Terpusat */}
-        <div className="max-w-xl mx-auto w-full">
-          {/* LOGIN FORM CARD */}
-          <section className="bg-white text-slate-900 rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+        {/* Main Grid Container: Top Pemanfaatan di sebelah kiri, Menu Login di sebelah kanan */}
+        <div className="max-w-7xl 2xl:max-w-[1600px] w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          
+          {/* TOP 5 PEMANFAATAN SECTION (DI SEBELAH KIRI) */}
+          <section className="lg:col-span-7 bg-slate-800/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-700/80">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/30 flex items-center justify-center text-amber-400 shadow-inner">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white tracking-tight">Top 5 Pemanfaatan Pengguna</h3>
+                  <p className="text-xs text-slate-400">Intensitas login dan pemanfaatan menu layanan tertinggi</p>
+                </div>
+              </div>
+
+              {/* Month Filter Dropdown */}
+              <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-300">
+                <span className="font-bold text-slate-400">Periode:</span>
+                <select
+                  value={selectedMonthFilter}
+                  onChange={(e) => setSelectedMonthFilter(e.target.value)}
+                  className="bg-transparent font-bold text-white focus:outline-none cursor-pointer"
+                >
+                  <option value="Semua" className="bg-slate-900 text-white">Semua (Akumulasi)</option>
+                  <option value="Januari" className="bg-slate-900 text-white">Januari</option>
+                  <option value="Februari" className="bg-slate-900 text-white">Februari</option>
+                  <option value="Maret" className="bg-slate-900 text-white">Maret</option>
+                  <option value="April" className="bg-slate-900 text-white">April</option>
+                  <option value="Mei" className="bg-slate-900 text-white">Mei</option>
+                  <option value="Juni" className="bg-slate-900 text-white">Juni</option>
+                  <option value="Juli" className="bg-slate-900 text-white">Juli</option>
+                  <option value="Agustus" className="bg-slate-900 text-white">Agustus</option>
+                  <option value="September" className="bg-slate-900 text-white">September</option>
+                  <option value="Oktober" className="bg-slate-900 text-white">Oktober</option>
+                  <option value="November" className="bg-slate-900 text-white">November</option>
+                  <option value="Desember" className="bg-slate-900 text-white">Desember</option>
+                </select>
+              </div>
+            </div>
+
+            {/* List Top 5 Unified */}
+            <div className="space-y-2.5">
+              {loginTop5List.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-xs">
+                  Belum ada aktivitas login atau pemanfaatan menu pada periode ini. Data akan tercatat otomatis saat user melakukan login & hit menu.
+                </div>
+              ) : (
+                loginTop5List.map((unit, idx) => {
+                  const rank = idx + 1;
+                  const medalColor = rank === 1 ? 'bg-amber-400 text-amber-950 font-black' : rank === 2 ? 'bg-slate-300 text-slate-900 font-bold' : rank === 3 ? 'bg-amber-700 text-white font-bold' : 'bg-slate-700 text-slate-200';
+                  return (
+                    <div key={unit.unitId} className="bg-slate-900/60 border border-slate-700/60 rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-slate-600 transition-all">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs shrink-0 ${medalColor}`}>
+                          {rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="text-xs font-bold text-white truncate" title={unit.officeName}>{unit.officeName}</p>
+                            <span className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded uppercase ${
+                              unit.role === 'kepwil' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-sky-500/20 text-sky-300'
+                            }`}>
+                              {unit.role === 'kepwil' ? 'Kepwil' : 'KC'}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-0.5">Kode: {unit.username}</p>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-xs font-black text-amber-400">{unit.totalPemanfaatan} Total</div>
+                        <div className="text-[10px] text-slate-400">Login: {unit.loginCount} | Menu: {unit.menuUsageCount}</div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </section>
+
+          {/* LOGIN FORM CARD (DI SEBELAH KANAN) */}
+          <section className="lg:col-span-5 bg-white text-slate-900 rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
             
             {/* Header Login */}
             <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-6 relative">
@@ -291,9 +420,6 @@ export default function InitialLoginPage({ citiesData, users, onLoginSuccess }: 
                 </div>
                 <div>
                   <h2 className="text-lg font-black tracking-tight">Login Aplikasi SENADA</h2>
-                  <p className="text-xs text-slate-300">
-                    Masuk untuk membuka seluruh tampilan dan fitur analitik
-                  </p>
                 </div>
               </div>
             </div>
@@ -375,9 +501,6 @@ export default function InitialLoginPage({ citiesData, users, onLoginSuccess }: 
 
             </form>
 
-            <div className="p-4 bg-slate-50 border-t border-slate-100 text-center text-[11px] text-slate-500">
-              Akses terbatas untuk personil dan pengelola layanan BPJS Kesehatan.
-            </div>
           </section>
 
         </div>
@@ -388,7 +511,6 @@ export default function InitialLoginPage({ citiesData, users, onLoginSuccess }: 
       <footer className="w-full border-t border-slate-800/80 bg-slate-900/60 py-4 px-6 text-center text-xs text-slate-400">
         <div className="max-w-7xl 2xl:max-w-[1600px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>© 2026 BPJS Kesehatan - Sentra Informasi dan Pengaduan (SENADA)</span>
-          <span className="text-slate-500">Versi 3.8 - Seluruh Hak Cipta Dilindungi</span>
         </div>
       </footer>
     </div>

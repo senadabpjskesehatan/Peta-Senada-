@@ -147,3 +147,32 @@ export interface SmsRecommendationResponse {
   generatedAt: string;
   isFallback?: boolean;
 }
+
+export interface UserActivityLog {
+  id: string;
+  userId: string;
+  username: string;
+  displayName: string;
+  role: UserRole;
+  officeName: string;
+  type: 'login' | 'menu_usage';
+  menuId?: string;
+  menuName?: string;
+  timestamp: string;
+  details?: string;
+}
+
+export interface UnitUtilizationSummary {
+  unitId: string;
+  username: string;
+  displayName: string;
+  role: 'kepwil' | 'kantor_cabang' | 'admin';
+  officeName: string;
+  parentKepwil?: string;
+  loginCount: number;
+  menuUsageCount: number;
+  totalPemanfaatan: number; // loginCount + menuUsageCount
+  menuBreakdown: Record<string, number>;
+  lastLoginAt: string;
+  lastActiveAt: string;
+}

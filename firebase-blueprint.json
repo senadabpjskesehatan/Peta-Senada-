@@ -55,9 +55,32 @@
         }
       },
       "required": []
+    },
+    "user_activity": {
+      "title": "User Activity & Utilization",
+      "description": "Tracks login frequency, menu utilization, and activity logs of Kepwil and Kantor Cabang users",
+      "properties": {
+        "summaries": {
+          "type": "array",
+          "description": "List of UnitUtilizationSummary objects for Kedeputian Wilayah and Kantor Cabang"
+        },
+        "recentLogs": {
+          "type": "array",
+          "description": "Stream of recent UserActivityLog events"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": []
     }
   },
   "firestore": {
+    "/user_activity/{docId}": {
+      "schema": "user_activity",
+      "description": "Stores user login counts, menu utilization metrics, and activity logs"
+    },
     "/user_management/{docId}": {
       "schema": "user_management",
       "description": "Stores user accounts and access permissions"

@@ -3,7 +3,7 @@ import { MapPin, RotateCw, Database, FileSpreadsheet, AlertCircle, CheckCircle, 
 import * as XLSX from 'xlsx';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { CityData, MapSyncConfig, FilterReference } from '../types';
+import { CityData, MapSyncConfig, FilterReference, AppUser } from '../types';
 import { fetchSheetData, extractSpreadsheetId, parseCSV, parseNumericValue } from '../utils/sheetParser';
 import { parseMonthValue, formatMonthToMM, formatMonthDisplay, isBulanMatching, isKepwilMatching, isKantorCabangMatching, parseFilterValueList, INDONESIAN_MONTH_NAMES } from '../utils/monthHelper';
 import { DEFAULT_CITIES, SAMPLE_SHEETS_CSV } from '../data/defaultData';
@@ -12,11 +12,13 @@ import SearchableFilterSelect, { SearchableOptionGroup } from './SearchableFilte
 import { saveMapDataToCloud, saveAppSettingsToCloud } from '../lib/firebase';
 import { extractTopikAndPokokFromRow } from '../data/topikMasalahReference';
 import TopikMasalahBreakdownSection from './TopikMasalahBreakdownSection';
+import { getUserDefaultFilters } from '../utils/userFilterHelper';
 
 interface IndonesiaMapProps {
   onCitiesDataChange: (cities: CityData[], updatedConfig?: MapSyncConfig) => void;
   currentCities: CityData[];
   isAdmin?: boolean;
+  currentUser?: AppUser | null;
   onRequestAdminLogin?: () => void;
   volumeThresholds?: { rendahMax: number; sedangMax: number; tinggiMax: number };
   onVolumeThresholdsChange?: (thresholds: { rendahMax: number; sedangMax: number; tinggiMax: number }) => void;
@@ -29,12 +31,14 @@ interface IndonesiaMapProps {
   selectedKantorCabang?: string | string[];
   onSelectedKantorCabangChange?: (kc: string | string[]) => void;
   filterReferences?: FilterReference[];
+  onResetToUserDefault?: () => void;
 }
 
 export default function IndonesiaMap({ 
   onCitiesDataChange, 
   currentCities, 
   isAdmin = false, 
+  currentUser,
   onRequestAdminLogin,
   volumeThresholds: propVolumeThresholds,
   onVolumeThresholdsChange,
@@ -47,6 +51,7 @@ export default function IndonesiaMap({
   selectedKantorCabang: propSelectedKantorCabang,
   onSelectedKantorCabangChange,
   filterReferences = [],
+  onResetToUserDefault,
 }: IndonesiaMapProps) {
   const [syncConfig, setSyncConfigState] = useState<MapSyncConfig>(() => {
     if (propSyncConfig && propSyncConfig.sheetUrl) return propSyncConfig;
@@ -1586,9 +1591,18 @@ export default function IndonesiaMap({
     Object.values(dynamicFilterStates).some(val => val && val !== 'Semua');
 
   const handleResetAllFilters = () => {
-    setSelectedBulan('Semua');
-    setSelectedKepwil('Semua');
-    setSelectedKantorCabang('Semua');
+    if (onResetToUserDefault) {
+      onResetToUserDefault();
+    } else if (currentUser && currentUser.role !== 'admin') {
+      const defaults = getUserDefaultFilters(currentUser, availableKepwilList, availableKantorCabangList, currentCities);
+      setSelectedBulan('Semua');
+      setSelectedKepwil(defaults.kepwil);
+      setSelectedKantorCabang(defaults.kantorCabang);
+    } else {
+      setSelectedBulan('Semua');
+      setSelectedKepwil('Semua');
+      setSelectedKantorCabang('Semua');
+    }
     setDynamicFilterStates({});
     setSelectedCityId(null);
   };
@@ -2299,7 +2313,6 @@ export default function IndonesiaMap({
                       </span>
                       <div className="truncate">
                         <span className="text-base sm:text-lg font-black text-indigo-950 block truncate">Layanan Informasi</span>
-                        <span className="text-xs sm:text-sm text-indigo-700 font-semibold block truncate">Permintaan info kepesertaan</span>
                       </div>
                     </div>
                   </div>
@@ -2328,7 +2341,6 @@ export default function IndonesiaMap({
                       </span>
                       <div className="truncate">
                         <span className="text-base sm:text-lg font-black text-teal-950 block truncate">Permintaan Tindakan</span>
-                        <span className="text-xs sm:text-sm text-teal-700 font-semibold block truncate">Kebutuhan eskalasi teknis</span>
                       </div>
                     </div>
                   </div>
@@ -2357,7 +2369,6 @@ export default function IndonesiaMap({
                       </span>
                       <div className="truncate">
                         <span className="text-base sm:text-lg font-black text-amber-950 block truncate">Pengaduan Layanan</span>
-                        <span className="text-xs sm:text-sm text-amber-700 font-semibold block truncate">Keluhan & isu operasional</span>
                       </div>
                     </div>
                   </div>
@@ -2389,7 +2400,6 @@ export default function IndonesiaMap({
                       </span>
                       <div className="truncate">
                         <span className="text-base sm:text-lg font-black text-slate-900 block truncate">Kepatuhan SLA</span>
-                        <span className="text-xs sm:text-sm text-slate-600 font-bold block truncate">Target: &ge; 85,00%</span>
                       </div>
                     </div>
 

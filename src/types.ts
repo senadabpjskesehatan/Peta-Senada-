@@ -4,6 +4,20 @@ export type TicketStatus = 'Belum Diproses' | 'Sedang Diproses' | 'Selesai';
 
 export type SlaStatus = 'On Time' | 'Warning' | 'Overdue';
 
+export type UserRole = 'admin' | 'kepwil' | 'kantor_cabang';
+export type UserStatus = 'aktif' | 'nonaktif';
+
+export interface AppUser {
+  id: string;
+  username: string; // Nama User / Kode User (e.g. 'KEPWIL 1' or '101')
+  displayName?: string; // Nama Lengkap / Deskripsi (e.g. 'KEDEPUTIAN WILAYAH 1' or 'KC BANDA ACEH')
+  role: UserRole; // Hak Akses: Admin | Kepwil | Kantor Cabang
+  status: UserStatus; // Status: Aktif | Nonaktif
+  password: string; // Password
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface CityData {
   id: string;
   name: string;

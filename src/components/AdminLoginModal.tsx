@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { Lock, User, Key, LogIn, X, AlertCircle, ShieldCheck } from 'lucide-react';
+import { AppUser } from '../types';
 
 interface AdminLoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess: () => void;
+  onLoginSuccess: (user: AppUser) => void;
+  users?: AppUser[];
 }
 
-export default function AdminLoginModal({ isOpen, onClose, onLoginSuccess }: AdminLoginModalProps) {
+export default function AdminLoginModal({ isOpen, onClose, onLoginSuccess, users = [] }: AdminLoginModalProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -21,16 +23,50 @@ export default function AdminLoginModal({ isOpen, onClose, onLoginSuccess }: Adm
     setIsLoading(true);
 
     setTimeout(() => {
-      // Validate credentials as requested: user "senada", password "150bisa"
-      if (username.trim().toLowerCase() === 'senada' && password.trim() === '150bisa') {
+      const cleanUser = username.trim().toLowerCase();
+      const cleanPass = password.trim();
+
+      // Check dynamic admin user from users list
+      const matchedAdmin = users.find(
+        u => u.username.toLowerCase() === cleanUser && u.role === 'admin'
+      );
+
+      if (matchedAdmin) {
+        if (matchedAdmin.password !== cleanPass) {
+          setIsLoading(false);
+          setError('Kata Sandi Administrator salah. Silakan coba kembali.');
+          return;
+        }
+        if (matchedAdmin.status === 'nonaktif') {
+          setIsLoading(false);
+          setError('Akun Administrator ini saat ini Nonaktif. Silakan hubungi pengelola.');
+          return;
+        }
         setIsLoading(false);
         setError(null);
-        onLoginSuccess();
+        onLoginSuccess(matchedAdmin);
         onClose();
-      } else {
-        setIsLoading(false);
-        setError('Nama Pengguna atau Kata Sandi salah. Silakan coba kembali.');
+        return;
       }
+
+      // Validate default credentials: user "senada", password "150bisa"
+      if (cleanUser === 'senada' && cleanPass === '150bisa') {
+        setIsLoading(false);
+        setError(null);
+        const defaultAdmin: AppUser = {
+          id: 'user_admin_senada',
+          username: 'senada',
+          role: 'admin',
+          status: 'aktif',
+          password: '150bisa'
+        };
+        onLoginSuccess(defaultAdmin);
+        onClose();
+        return;
+      }
+
+      setIsLoading(false);
+      setError('Nama Pengguna atau Kata Sandi Administrator salah.');
     }, 400);
   };
 

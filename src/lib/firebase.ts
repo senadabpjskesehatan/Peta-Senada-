@@ -1,7 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, getDoc, onSnapshot, setLogLevel } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { CityData, DynamicChart, MapSyncConfig } from '../types';
+import { CityData, DynamicChart, MapSyncConfig, AppUser } from '../types';
 import debounce from 'lodash/debounce';
 
 // Suppress Firestore SDK console backoff retry spam
@@ -511,5 +511,66 @@ export async function saveDynamicChartsToCloud(charts: DynamicChart[]) {
   if (checkQuotaExceeded()) return;
   pendingCharts = charts;
   executeSaveCharts();
+}
+
+import { REFERENCE_USERS } from '../data/referenceUsers';
+export const DEFAULT_USERS: AppUser[] = REFERENCE_USERS;
+
+export interface CloudUsersData {
+  users?: AppUser[];
+  updatedAt?: string;
+}
+
+/**
+ * Realtime subscription for User Management accounts
+ */
+export function subscribeToUsers(callback: (users: AppUser[] | null) => void) {
+  if (checkQuotaExceeded()) {
+    return () => {};
+  }
+  try {
+    const docRef = doc(db, 'user_management', 'all_users');
+    return onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as CloudUsersData;
+        if (data && Array.isArray(data.users)) {
+          callback(data.users);
+          return;
+        }
+      }
+      callback(null);
+    }, (error: any) => {
+      if (error?.code === 'resource-exhausted' || error?.message?.includes('Quota')) {
+        markQuotaExceeded();
+      }
+    });
+  } catch (err) {
+    return () => {};
+  }
+}
+
+/**
+ * Persist Users to Cloud Firestore with localStorage fallback
+ */
+export async function saveUsersToCloud(users: AppUser[]) {
+  try {
+    localStorage.setItem('senada_users_list_v1', JSON.stringify(users));
+  } catch (e) {
+    // quota ignore
+  }
+
+  if (checkQuotaExceeded()) return;
+  try {
+    const docRef = doc(db, 'user_management', 'all_users');
+    await setDoc(docRef, sanitizeForFirestore({
+      users,
+      updatedAt: new Date().toISOString()
+    }), { merge: true });
+  } catch (err: any) {
+    if (err?.code === 'resource-exhausted' || err?.message?.includes('Quota')) {
+      markQuotaExceeded();
+    }
+    console.error('Failed to save users to cloud', err);
+  }
 }
 

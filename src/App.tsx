@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   LayoutDashboard,
   MapPin,
@@ -33,10 +33,12 @@ import {
   Building2,
   RotateCcw,
   Hash,
-  Table2
+  Table2,
+  Users,
+  KeyRound
 } from 'lucide-react';
 
-import { CityData, Ticket, MonthlyPerformance, DynamicChart, MapSyncConfig, FilterReference } from './types';
+import { CityData, Ticket, MonthlyPerformance, DynamicChart, MapSyncConfig, FilterReference, AppUser } from './types';
 import SearchableFilterSelect from './components/SearchableFilterSelect';
 import { computeFilterOptions } from './utils/filterOptions';
 import { DEFAULT_CITIES, DEFAULT_TICKETS, MONTHLY_PERFORMANCE, DEFAULT_CHARTS, SAMPLE_SHEETS_CSV, findCityCoordinates, getKepwilForCity } from './data/defaultData';
@@ -44,6 +46,7 @@ import { parseNumericValue, fetchSheetData, parseCSV } from './utils/sheetParser
 import { isBulanMatching, isKepwilMatching, isKantorCabangMatching, parseMonthValue, parseFilterValueList } from './utils/monthHelper';
 import { extractTopikAndPokokFromRow } from './data/topikMasalahReference';
 import SuperMindSenada from './components/SuperMindSenada';
+import { getUserDefaultFilters, getUserDefaultScopeLabel, getUserOfficeOrWilayahLabel } from './utils/userFilterHelper';
 import {
   subscribeToAppSettings,
   subscribeToMapData,
@@ -51,6 +54,9 @@ import {
   saveAppSettingsToCloud,
   saveMapDataToCloud,
   saveDynamicChartsToCloud,
+  subscribeToUsers,
+  saveUsersToCloud,
+  DEFAULT_USERS
 } from './lib/firebase';
 
 // Component Imports
@@ -59,9 +65,12 @@ import SlaTracker from './components/SlaTracker';
 import MonthlyAnalytics from './components/MonthlyAnalytics';
 import DynamicChartItem from './components/DynamicChartItem';
 import AdminLoginModal from './components/AdminLoginModal';
+import ResetPasswordModal from './components/ResetPasswordModal';
+import InitialLoginPage from './components/InitialLoginPage';
 import ReferenceManager from './components/ReferenceManager';
 import LaporanRekapTable from './components/LaporanRekapTable';
 import ReportingPivotTable from './components/ReportingPivotTable';
+import UserManagement from './components/UserManagement';
 import { SenadaLogo } from './components/SenadaLogo';
 
 const CITIES_STORAGE_KEY = 'indonesia_map_cities_data_v3';
@@ -189,7 +198,7 @@ export default function App() {
     };
   });
 
-  const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts' | 'sms' | 'reporting'>('map');
+  const [activeMainTab, setActiveMainTab] = useState<'map' | 'tickets' | 'analytics' | 'custom-charts' | 'sms' | 'reporting' | 'users'>('map');
   const [isGlobalFilterExpanded, setIsGlobalFilterExpanded] = useState<boolean>(false);
   const [showCopyNotification, setShowCopyNotification] = useState(false);
   const [showCopyDialog, setShowCopyDialog] = useState<string | null>(null);
@@ -200,24 +209,186 @@ export default function App() {
     tinggiMax: 5000,
   });
 
+  // User Management State (Persisted in localStorage and synchronized with Cloud Firestore)
+  const [usersData, setUsersData] = useState<AppUser[]>(() => {
+    try {
+      const saved = localStorage.getItem('senada_users_list_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 20) return parsed;
+      }
+    } catch (e) {}
+    try {
+      localStorage.setItem('senada_users_list_v2', JSON.stringify(DEFAULT_USERS));
+    } catch (e) {}
+    return DEFAULT_USERS;
+  });
+
+  const handleUsersChange = (newUsers: AppUser[]) => {
+    setUsersData(newUsers);
+    try {
+      localStorage.setItem('senada_users_list_v2', JSON.stringify(newUsers));
+    } catch (e) {}
+    saveUsersToCloud(newUsers);
+  };
+
+  // Current logged in user info
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('app_current_user');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    if (localStorage.getItem('is_admin_logged_in') === 'true') {
+      return {
+        id: 'user_admin_senada',
+        username: 'senada',
+        role: 'admin',
+        status: 'aktif',
+        password: '150bisa'
+      };
+    }
+    return null;
+  });
+
+  // Application Login State (User must login on initial page to see the overall dashboard view)
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    return localStorage.getItem('app_is_logged_in') === 'true';
+  });
+
   // Authentication & Guest / Admin Mode state (Default: Guest / Mode Tamu unless previously logged in as admin)
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     return localStorage.getItem('is_admin_logged_in') === 'true';
   });
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
 
-  const handleAdminLoginSuccess = () => {
+  // 3 Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang - supports multi-select checklist)
+  const [selectedBulan, setSelectedBulan] = useState<string | string[]>('Semua');
+  const [selectedKepwil, setSelectedKepwil] = useState<string | string[]>('Semua');
+  const [selectedKantorCabang, setSelectedKantorCabang] = useState<string | string[]>('Semua');
+  const hasInitializedUserDefault = useRef(false);
+
+  // Enforce access control for User Kepwil & Kantor Cabang (allowed 'map', 'custom-charts' (OVERVIEW), and 'sms')
+  useEffect(() => {
+    if (isLoggedIn && !isAdmin && activeMainTab !== 'map' && activeMainTab !== 'custom-charts' && activeMainTab !== 'sms') {
+      setActiveMainTab('map');
+    }
+  }, [isLoggedIn, isAdmin, activeMainTab]);
+
+  const handleAppLoginSuccess = (user: AppUser) => {
+    setCurrentUser(user);
+    setIsLoggedIn(true);
+    const isAdm = user.role === 'admin';
+    setIsAdmin(isAdm);
+    localStorage.setItem('app_is_logged_in', 'true');
+    localStorage.setItem('is_admin_logged_in', isAdm ? 'true' : 'false');
+    localStorage.setItem('app_current_user', JSON.stringify(user));
+
+    // Resolve full filter options to apply default data based on user role (Kepwil or Kantor Cabang)
+    const allOpts = computeFilterOptions(citiesData, [], mapSyncConfig, 'Semua', 'Semua');
+    const defaultFilters = getUserDefaultFilters(
+      user,
+      allOpts.availableKepwilList,
+      allOpts.availableKantorCabangList,
+      citiesData
+    );
+    setSelectedBulan('Semua');
+    setSelectedKepwil(defaultFilters.kepwil);
+    setSelectedKantorCabang(defaultFilters.kantorCabang);
+    hasInitializedUserDefault.current = true;
+
+    if (isAdm) {
+      setSyncStatusToast(`Berhasil Login sebagai Administrator (${user.username}) - Data Nasional`);
+    } else if (user.role === 'kepwil') {
+      setSyncStatusToast(`Berhasil Login sebagai User Kepwil (${user.username}) - Menampilkan Data Default: ${user.displayName || user.username}`);
+    } else {
+      setSyncStatusToast(`Berhasil Login sebagai User Kantor Cabang (${user.username}) - Menampilkan Data Default: ${user.displayName || user.username}`);
+    }
+
+    if (!isAdm && activeMainTab !== 'map' && activeMainTab !== 'custom-charts' && activeMainTab !== 'sms') {
+      setActiveMainTab('map');
+    }
+    setTimeout(() => setSyncStatusToast(null), 4000);
+  };
+
+  const handleAppLogout = () => {
+    hasInitializedUserDefault.current = false;
+    setIsLoggedIn(false);
+    setIsAdmin(false);
+    setCurrentUser(null);
+    setSelectedBulan('Semua');
+    setSelectedKepwil('Semua');
+    setSelectedKantorCabang('Semua');
+    localStorage.removeItem('app_is_logged_in');
+    localStorage.removeItem('is_admin_logged_in');
+    localStorage.removeItem('app_current_user');
+    setSyncStatusToast('Anda telah keluar dari aplikasi');
+    setTimeout(() => setSyncStatusToast(null), 3000);
+  };
+
+  const handleAdminLoginSuccess = (user: AppUser) => {
+    setCurrentUser(user);
     setIsAdmin(true);
+    setSelectedBulan('Semua');
+    setSelectedKepwil('Semua');
+    setSelectedKantorCabang('Semua');
     localStorage.setItem('is_admin_logged_in', 'true');
-    setSyncStatusToast('Berhasil Login sebagai Administrator (User: senada)');
+    localStorage.setItem('app_current_user', JSON.stringify(user));
+    setSyncStatusToast(`Berhasil Login sebagai Administrator (${user.username}) - Data Nasional`);
     setTimeout(() => setSyncStatusToast(null), 3000);
   };
 
   const handleAdminLogout = () => {
     setIsAdmin(false);
     localStorage.removeItem('is_admin_logged_in');
-    setSyncStatusToast('Beralih ke Mode Tamu (View Only)');
+    setSyncStatusToast('Beralih ke Mode Pengguna');
     setTimeout(() => setSyncStatusToast(null), 3000);
+  };
+
+  // User Account Dropdown Menu & Self Reset Password state
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
+
+  // Close user dropdown menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+    };
+    if (isUserMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isUserMenuOpen]);
+
+  const handleSelfPasswordResetSuccess = (newPassword: string) => {
+    if (!currentUser) return;
+
+    const updatedUser: AppUser = {
+      ...currentUser,
+      password: newPassword,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setCurrentUser(updatedUser);
+    try {
+      localStorage.setItem('app_current_user', JSON.stringify(updatedUser));
+    } catch (e) {}
+
+    // Update inside usersData state
+    const updatedUsers = usersData.map(u => 
+      u.id === currentUser.id || u.username.toLowerCase() === currentUser.username.toLowerCase()
+        ? { ...u, password: newPassword, updatedAt: new Date().toISOString() }
+        : u
+    );
+
+    handleUsersChange(updatedUsers);
+    setIsResetPasswordModalOpen(false);
+    setSyncStatusToast(`Password akun "${currentUser.username}" berhasil dirubah!`);
+    setTimeout(() => setSyncStatusToast(null), 4000);
   };
 
   // Real-time Firestore Subscriptions for Multi-Device and Guest Synchronization
@@ -297,10 +468,24 @@ export default function App() {
       }
     });
 
+    // 4. Subscribe to User Management Accounts from Cloud Firestore
+    const unsubUsers = subscribeToUsers((cloudUsers) => {
+      if (cloudUsers && Array.isArray(cloudUsers) && cloudUsers.length > 20) {
+        setUsersData(cloudUsers);
+        try {
+          localStorage.setItem('senada_users_list_v2', JSON.stringify(cloudUsers));
+        } catch (e) {}
+      } else {
+        // Automatically push all reference users to cloud if not already synced
+        saveUsersToCloud(DEFAULT_USERS);
+      }
+    });
+
     return () => {
       unsubMap();
       unsubCharts();
       unsubSettings();
+      unsubUsers();
     };
   }, []);
 
@@ -314,10 +499,6 @@ export default function App() {
     safeSaveChartsToLocalStorage(dynamicCharts);
   }, [dynamicCharts]);
 
-  // 3 Filter Dropdown States (Bulan, KEPWIL, Kantor Cabang - supports multi-select checklist)
-  const [selectedBulan, setSelectedBulan] = useState<string | string[]>('Semua');
-  const [selectedKepwil, setSelectedKepwil] = useState<string | string[]>('Semua');
-  const [selectedKantorCabang, setSelectedKantorCabang] = useState<string | string[]>('Semua');
 
   // Filtered dataset for global metrics calculation according to active dropdown filters
   const filteredCitiesForMetrics = useMemo(() => {
@@ -403,6 +584,52 @@ export default function App() {
   const { availableBulanList, availableKepwilList, availableKantorCabangList, groupedKantorCabang } = useMemo(() => {
     return computeFilterOptions(citiesData, [], mapSyncConfig, selectedBulan, selectedKepwil);
   }, [citiesData, mapSyncConfig, selectedBulan, selectedKepwil]);
+
+  // Complete list of all Kepwil and Kantor Cabang across the dataset (unconstrained by current filter selection)
+  const { allAvailableKepwilList, allAvailableKantorCabangList } = useMemo(() => {
+    const opts = computeFilterOptions(citiesData, [], mapSyncConfig, 'Semua', 'Semua');
+    return {
+      allAvailableKepwilList: opts.availableKepwilList,
+      allAvailableKantorCabangList: opts.availableKantorCabangList
+    };
+  }, [citiesData, mapSyncConfig]);
+
+  // Synchronize initial default filters for logged-in Kepwil or Kantor Cabang user on initial session restore
+  useEffect(() => {
+    if (isLoggedIn && currentUser && currentUser.role !== 'admin' && !hasInitializedUserDefault.current) {
+      if (allAvailableKepwilList.length > 0 || allAvailableKantorCabangList.length > 0 || citiesData.length > 0) {
+        const defaults = getUserDefaultFilters(
+          currentUser,
+          allAvailableKepwilList,
+          allAvailableKantorCabangList,
+          citiesData
+        );
+        setSelectedKepwil(defaults.kepwil);
+        setSelectedKantorCabang(defaults.kantorCabang);
+        hasInitializedUserDefault.current = true;
+      }
+    }
+  }, [isLoggedIn, currentUser, allAvailableKepwilList, allAvailableKantorCabangList, citiesData]);
+
+  const handleResetToUserDefault = () => {
+    if (currentUser && currentUser.role !== 'admin') {
+      const defaults = getUserDefaultFilters(
+        currentUser,
+        allAvailableKepwilList,
+        allAvailableKantorCabangList,
+        citiesData
+      );
+      setSelectedBulan('Semua');
+      setSelectedKepwil(defaults.kepwil);
+      setSelectedKantorCabang(defaults.kantorCabang);
+      setSyncStatusToast(`Filter dikembalikan ke data default: ${getUserDefaultScopeLabel(currentUser)}`);
+      setTimeout(() => setSyncStatusToast(null), 3500);
+    } else {
+      setSelectedBulan('Semua');
+      setSelectedKepwil('Semua');
+      setSelectedKantorCabang('Semua');
+    }
+  };
 
   // Global aggregate metrics computed on the fly from current Excel / Sheet cities data
   const summaryMetrics = useMemo(() => {
@@ -877,6 +1104,29 @@ export default function App() {
     setTimeout(() => setShowCopyDialog(null), 2500);
   };
 
+  // If user is not logged in, display the initial login page with key metrics and 10 top services
+  if (!isLoggedIn) {
+    return (
+      <InitialLoginPage
+        citiesData={citiesData}
+        users={usersData}
+        onLoginSuccess={handleAppLoginSuccess}
+      />
+    );
+  }
+
+  const accessibleNavTabs = (() => {
+    if (isAdmin) {
+      const base = navOrder.filter(k => k !== 'analytics' && k !== 'tickets' && k !== 'referensi' && k !== 'laporan' && k !== 'reporting');
+      if (!base.includes('users')) {
+        base.push('users');
+      }
+      return base;
+    }
+    // User Kepwil and User Kantor Cabang can access 'map', 'custom-charts' (OVERVIEW), and 'sms'
+    return ['map', 'custom-charts', 'sms'];
+  })();
+
   return (
     <div className="h-screen w-full bg-slate-50 flex overflow-hidden font-sans text-slate-900 selection:bg-blue-500/20 selection:text-slate-900 antialiased">
       
@@ -885,13 +1135,14 @@ export default function App() {
         <div className="p-5 border-b border-slate-800">
           <SenadaLogo size="md" theme="dark" showSubtitle={true} />
         </div>
-        
+
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navOrder.filter(k => k !== 'analytics' && k !== 'tickets' && k !== 'referensi' && k !== 'laporan' && k !== 'reporting').map((tabKey, idx, arr) => {
+          {accessibleNavTabs.map((tabKey, idx, arr) => {
             const isMap = tabKey === 'map';
             const isRef = tabKey === 'referensi';
             const isSms = tabKey === 'sms';
             const isReporting = tabKey === 'reporting';
+            const isUsers = tabKey === 'users';
             const isActive = activeMainTab === tabKey;
             const label = isMap 
               ? 'PETA NASIONAL' 
@@ -901,6 +1152,8 @@ export default function App() {
               ? 'SMS (Super Mind Senada)' 
               : isReporting
               ? 'REPORTING'
+              : isUsers
+              ? 'MANAJEMEN USER'
               : 'OVERVIEW';
 
             return (
@@ -912,6 +1165,8 @@ export default function App() {
                       ? 'bg-indigo-600/30 text-indigo-300 font-medium border border-indigo-500/40' 
                       : isReporting
                       ? 'bg-emerald-600/25 text-emerald-300 font-medium border border-emerald-500/40'
+                      : isUsers
+                      ? 'bg-blue-600/25 text-blue-300 font-medium border border-blue-500/40'
                       : 'bg-blue-600/20 text-blue-400 font-medium'
                     : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
@@ -925,61 +1180,70 @@ export default function App() {
                     <Sparkles className={`w-5 h-5 shrink-0 ${isActive ? 'text-indigo-400' : 'text-slate-500'}`} />
                   ) : isReporting ? (
                     <Table2 className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-400' : 'text-slate-500'}`} />
+                  ) : isUsers ? (
+                    <Users className={`w-5 h-5 shrink-0 ${isActive ? 'text-blue-400' : 'text-slate-500'}`} />
                   ) : (
                     <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isActive ? 'bg-blue-400' : 'bg-slate-600'}`}></div>
                   )}
                   <span className="text-sm sm:text-base font-bold truncate">{label}</span>
+                  {isUsers && (
+                    <span className="text-[10px] bg-blue-500/25 text-blue-300 font-extrabold px-1.5 py-0.5 rounded ml-auto">
+                      Admin
+                    </span>
+                  )}
                 </button>
 
-                <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-0.5 transition-opacity">
-                  <button
-                    title="Geser ke atas"
-                    disabled={idx === 0}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      moveNavItem(idx, 'up');
-                    }}
-                    className={`p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white ${idx === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
-                  >
-                    <ChevronUp className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    title="Geser ke bawah"
-                    disabled={idx === arr.length - 1}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      moveNavItem(idx, 'down');
-                    }}
-                    className={`p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white ${idx === arr.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
-                  >
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                {isAdmin && !isUsers && (
+                  <div className="opacity-0 group-hover:opacity-100 flex items-center space-x-0.5 transition-opacity">
+                    <button
+                      title="Geser ke atas"
+                      disabled={idx === 0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        moveNavItem(idx, 'up');
+                      }}
+                      className={`p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white ${idx === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                    >
+                      <ChevronUp className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      title="Geser ke bawah"
+                      disabled={idx === arr.length - 1}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        moveNavItem(idx, 'down');
+                      }}
+                      className={`p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white ${idx === arr.length - 1 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-800">
+        <div className="hidden p-4 border-t border-slate-800">
           {isAdmin ? (
             <div className="bg-slate-800/90 border border-slate-700/80 p-3 rounded-xl flex items-center justify-between gap-2.5">
               <div className="flex items-center space-x-2.5 min-w-0">
                 <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center font-black text-white shrink-0 shadow-xs text-xs">
-                  S
+                  {(currentUser?.username || 'senada').charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-1">
-                    <p className="text-xs font-bold text-white truncate">senada</p>
+                    <p className="text-xs font-bold text-white truncate">{currentUser?.username || 'senada'}</p>
                     <span className="text-[9px] bg-blue-500/30 text-blue-300 font-extrabold px-1.5 py-0.2 rounded">Admin</span>
                   </div>
-                  <p className="text-[10px] text-slate-400 truncate">Akses Penuh (Full Control)</p>
+                  <p className="text-[10px] text-slate-400 truncate">Akses Penuh Seluruh Menu</p>
                 </div>
               </div>
 
               <button
-                onClick={handleAdminLogout}
+                onClick={handleAppLogout}
                 className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-700/60 rounded-lg transition-colors cursor-pointer"
-                title="Keluar / Logout (Beralih ke Mode Tamu)"
+                title="Keluar / Logout (Kembali ke Halaman Awal)"
                 id="admin-logout-button"
               >
                 <LogOut className="h-4 w-4" />
@@ -989,23 +1253,44 @@ export default function App() {
             <div className="bg-slate-800/60 border border-slate-700/50 p-3 rounded-xl space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2 min-w-0">
-                  <div className="w-7 h-7 rounded-lg bg-slate-700 flex items-center justify-center text-slate-300 shrink-0">
-                    <Shield className="h-4 w-4" />
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
+                    currentUser?.role === 'kepwil'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                  }`}>
+                    {(currentUser?.username || 'U').charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xs font-bold text-slate-200 truncate">Mode Tamu</p>
-                    <p className="text-[10px] text-slate-400 truncate">Hanya Melihat (View Only)</p>
+                    <div className="flex items-center gap-1">
+                      <p className="text-xs font-bold text-slate-200 truncate">{currentUser?.username || 'Pengguna'}</p>
+                      <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded ${
+                        currentUser?.role === 'kepwil'
+                          ? 'bg-emerald-500/30 text-emerald-300'
+                          : 'bg-sky-500/30 text-sky-300'
+                      }`}>
+                        {currentUser?.role === 'kepwil' ? 'Kepwil' : 'Kantor Cabang'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 truncate">Akses: View & Filter Saja</p>
                   </div>
                 </div>
+
+                <button
+                  onClick={handleAppLogout}
+                  className="p-1 text-slate-400 hover:text-rose-400 hover:bg-slate-700/60 rounded-lg transition-colors cursor-pointer"
+                  title="Keluar / Logout Aplikasi"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
               </div>
 
               <button
                 onClick={() => setIsLoginModalOpen(true)}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                className="w-full bg-slate-700/60 hover:bg-slate-700 text-slate-200 font-bold py-1.5 px-3 rounded-lg text-xs transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer border border-slate-600/50"
                 id="admin-login-button"
                 title="Masuk sebagai Administrator"
               >
-                <LogIn className="h-3.5 w-3.5" />
+                <LogIn className="h-3.5 w-3.5 text-blue-400" />
                 <span>Login Admin</span>
               </button>
             </div>
@@ -1026,6 +1311,7 @@ export default function App() {
                activeMainTab === 'analytics' ? 'Analitik Performa Layanan Bulanan' :
                activeMainTab === 'sms' ? 'SMS (Super Mind Senada) - Rekomendasi Strategis AI' :
                activeMainTab === 'reporting' ? 'REPORTING - PIVOT TABLE EXCEL' :
+               activeMainTab === 'users' ? 'MANAJEMEN USER & HAK AKSES' :
                'Visualisasi Grafik Kustom Dinamis'}
             </h2>
             <span className="hidden sm:inline-block text-slate-300">|</span>
@@ -1107,6 +1393,169 @@ export default function App() {
                 </button>
               )}
             </div>
+
+            {/* HEADER ACCOUNT & LOGOUT MENU WITH RESET PASSWORD SUB-OPTION */}
+            <div className="relative" ref={userMenuRef}>
+              {(() => {
+                const userInfo = getUserOfficeOrWilayahLabel(currentUser);
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                    className={`border text-xs sm:text-sm font-bold px-3 py-1.5 rounded-xl transition-all flex items-center gap-2.5 cursor-pointer shadow-3xs active:scale-95 ${
+                      isUserMenuOpen
+                        ? 'bg-slate-100 border-slate-300 text-slate-900 ring-2 ring-blue-500/20'
+                        : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:border-slate-300'
+                    }`}
+                    id="header-logout-button"
+                    title={`Akun: ${userInfo.userName} | ${userInfo.officeName} (Klik untuk Logout / Rubah Password)`}
+                    aria-expanded={isUserMenuOpen}
+                  >
+                    <div
+                      className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center font-black text-white text-xs shrink-0 shadow-3xs ${
+                        currentUser?.role === 'admin'
+                          ? 'bg-gradient-to-br from-indigo-500 to-blue-600'
+                          : currentUser?.role === 'kepwil'
+                          ? 'bg-gradient-to-br from-emerald-500 to-teal-600'
+                          : 'bg-gradient-to-br from-sky-500 to-blue-500'
+                      }`}
+                    >
+                      {(userInfo.userName || 'S').charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex flex-col text-left leading-tight min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-slate-900 text-xs truncate max-w-[110px] sm:max-w-[140px]">
+                          {userInfo.userName}
+                        </span>
+                        <span
+                          className={`text-[9px] font-bold px-1.5 py-0.2 rounded uppercase tracking-wider shrink-0 ${
+                            currentUser?.role === 'admin'
+                              ? 'bg-indigo-100 text-indigo-700'
+                              : currentUser?.role === 'kepwil'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-sky-100 text-sky-800'
+                          }`}
+                        >
+                          {currentUser?.role === 'admin' ? 'Admin' : currentUser?.role === 'kepwil' ? 'Kepwil' : 'KC'}
+                        </span>
+                      </div>
+                      <div
+                        className="text-[10px] sm:text-[11px] font-semibold text-slate-500 truncate max-w-[130px] sm:max-w-[190px] flex items-center gap-1 mt-0.5"
+                        title={userInfo.officeName}
+                      >
+                        <Building2 className="w-3 h-3 text-slate-400 shrink-0" />
+                        <span className="truncate">{userInfo.officeName}</span>
+                      </div>
+                    </div>
+                    <span className="hidden lg:inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 bg-rose-50 border border-rose-100 px-2 py-0.5 rounded-lg ml-0.5 shrink-0">
+                      <LogOut className="w-3 h-3 text-rose-500" />
+                      Logout
+                    </span>
+                    <ChevronDown
+                      className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform ${
+                        isUserMenuOpen ? 'rotate-180 text-blue-600' : ''
+                      }`}
+                    />
+                  </button>
+                );
+              })()}
+
+              {/* DROPDOWN MENU */}
+              {isUserMenuOpen && (() => {
+                const userInfo = getUserOfficeOrWilayahLabel(currentUser);
+                return (
+                  <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 py-2 z-50 animate-fadeIn text-xs">
+                    {/* USER SUMMARY */}
+                    <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-3 bg-slate-50/60 rounded-t-2xl">
+                      <div
+                        className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-white text-xs shrink-0 shadow-3xs ${
+                          currentUser?.role === 'admin'
+                            ? 'bg-gradient-to-br from-indigo-500 to-blue-600'
+                            : currentUser?.role === 'kepwil'
+                            ? 'bg-gradient-to-br from-emerald-500 to-teal-600'
+                            : 'bg-gradient-to-br from-sky-500 to-blue-500'
+                        }`}
+                      >
+                        {(userInfo.userName || 'S').charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-extrabold text-slate-900 text-sm truncate">
+                            {userInfo.userName}
+                          </span>
+                          <span
+                            className={`text-[9px] font-bold px-1.5 py-0.2 rounded uppercase tracking-wider ${
+                              currentUser?.role === 'admin'
+                                ? 'bg-indigo-100 text-indigo-700'
+                                : currentUser?.role === 'kepwil'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-sky-100 text-sky-800'
+                            }`}
+                          >
+                            {userInfo.typeLabel}
+                          </span>
+                        </div>
+                        <div
+                          className="flex items-center gap-1 text-[11px] text-slate-600 font-semibold truncate mt-0.5"
+                          title={userInfo.officeName}
+                        >
+                          <Building2 className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span className="truncate">{userInfo.officeName}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                  <div className="py-1">
+                    {/* SUB-OPTION 1: RUBAH PASSWORD */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        setIsResetPasswordModalOpen(true);
+                      }}
+                      className="w-full px-4 py-2.5 text-left hover:bg-amber-50/80 transition-colors flex items-center gap-3 cursor-pointer group text-slate-700 hover:text-amber-900"
+                      id="menu-item-reset-password"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 group-hover:bg-amber-200 transition-colors">
+                        <KeyRound className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="font-bold text-slate-800 group-hover:text-amber-950 block text-xs sm:text-sm">
+                          Rubah Password
+                        </span>
+                        <span className="text-[11px] text-slate-400 group-hover:text-amber-800/80 block">
+                          Masukkan password lama & buat password baru
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* SUB-OPTION 2: LOGOUT */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        handleAppLogout();
+                      }}
+                      className="w-full px-4 py-2.5 text-left hover:bg-rose-50/80 transition-colors flex items-center gap-3 cursor-pointer group text-slate-700 hover:text-rose-900 border-t border-slate-100 mt-1"
+                      id="menu-item-logout"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0 group-hover:bg-rose-200 transition-colors">
+                        <LogOut className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="font-bold text-slate-800 group-hover:text-rose-950 block text-xs sm:text-sm">
+                          Keluar Aplikasi
+                        </span>
+                        <span className="text-[11px] text-slate-400 group-hover:text-rose-800/80 block">
+                          Logout ke halaman awal
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+            </div>
           </div>
         </header>
 
@@ -1121,6 +1570,16 @@ export default function App() {
                   <Filter className="w-4 h-4 text-indigo-600 shrink-0" />
                   Filter Data Aktif:
                 </span>
+                {currentUser?.role === 'kepwil' && (
+                  <span className="bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold px-2.5 py-0.5 rounded-lg text-xs shadow-3xs flex items-center gap-1">
+                    🏛️ Data Default User Kepwil ({currentUser.username})
+                  </span>
+                )}
+                {currentUser?.role === 'kantor_cabang' && (
+                  <span className="bg-blue-100 text-blue-900 border border-blue-300 font-extrabold px-2.5 py-0.5 rounded-lg text-xs shadow-3xs flex items-center gap-1">
+                    🏢 Data Default User KC ({currentUser.displayName || currentUser.username})
+                  </span>
+                )}
                 {parseFilterValueList(selectedBulan).length > 0 && (
                   <span className="bg-white text-indigo-800 font-bold px-3 py-1 rounded-lg border border-indigo-200 shadow-3xs flex items-center gap-1">
                     📅 Bulan: <strong>{parseFilterValueList(selectedBulan).join(', ')}</strong>
@@ -1142,21 +1601,17 @@ export default function App() {
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedBulan('Semua');
-                  setSelectedKepwil('Semua');
-                  setSelectedKantorCabang('Semua');
-                }}
+                onClick={handleResetToUserDefault}
                 className="text-sm text-rose-600 hover:text-rose-800 font-bold underline cursor-pointer"
                 id="reset-top-banner-filter-btn"
               >
-                Reset Filter
+                {currentUser?.role !== 'admin' ? 'Kembali ke Default Akun' : 'Reset Filter'}
               </button>
             </div>
           )}
 
           {/* GLOBAL FILTER BAR FOR OTHER PAGES (ANALYTICS, TICKETS, CUSTOM CHARTS) */}
-          {activeMainTab !== 'map' && activeMainTab !== 'referensi' && activeMainTab !== 'reporting' && (
+          {activeMainTab !== 'map' && activeMainTab !== 'referensi' && activeMainTab !== 'reporting' && activeMainTab !== 'users' && (
             <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3.5 animate-fadeIn transition-all">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
@@ -1195,15 +1650,11 @@ export default function App() {
                   {(parseFilterValueList(selectedBulan).length > 0 || parseFilterValueList(selectedKepwil).length > 0 || parseFilterValueList(selectedKantorCabang).length > 0) && (
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedBulan('Semua');
-                        setSelectedKepwil('Semua');
-                        setSelectedKantorCabang('Semua');
-                      }}
+                      onClick={handleResetToUserDefault}
                       className="text-xs sm:text-sm text-rose-600 hover:text-rose-800 font-bold flex items-center gap-1.5 cursor-pointer bg-rose-50 px-3 py-1.5 rounded-lg border border-rose-200"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
-                      <span className="hidden md:inline">Reset</span>
+                      <span className="hidden md:inline">{currentUser?.role !== 'admin' ? 'Reset Default' : 'Reset'}</span>
                     </button>
                   )}
 
@@ -1265,7 +1716,7 @@ export default function App() {
           )}
 
           {/* 4-COLUMN SUMMARY METRIC GRID ACCORDING TO EXCEL DATA */}
-          {activeMainTab !== 'reporting' && (
+          {activeMainTab !== 'reporting' && activeMainTab !== 'users' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
               
               {/* 1. TOTAL TIKET */}
@@ -1371,6 +1822,8 @@ export default function App() {
                   selectedKantorCabang={selectedKantorCabang}
                   onSelectedKantorCabangChange={setSelectedKantorCabang}
                   filterReferences={filterReferences}
+                  currentUser={currentUser}
+                  onResetToUserDefault={handleResetToUserDefault}
                 />
               </div>
             )}
@@ -1561,9 +2014,18 @@ export default function App() {
                 availableKantorCabangList={availableKantorCabangList}
               />
             )}
+
+            {/* VIEW 8: MANAJEMEN USER & HAK AKSES */}
+            {activeMainTab === 'users' && isAdmin && (
+              <div className="animate-fadeIn">
+                <UserManagement
+                  users={usersData}
+                  onUsersChange={handleUsersChange}
+                  currentUserId={currentUser?.id}
+                />
+              </div>
+            )}
           </div>
-
-
 
           {/* FOOTER COLOFON */}
           <footer className="mt-8 border-t border-slate-200 pt-6 text-center text-xs text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -1582,6 +2044,15 @@ export default function App() {
         isOpen={isLoginModalOpen}
         onClose={() => setIsLoginModalOpen(false)}
         onLoginSuccess={handleAdminLoginSuccess}
+        users={usersData}
+      />
+
+      {/* USER SELF RESET PASSWORD MODAL */}
+      <ResetPasswordModal
+        isOpen={isResetPasswordModalOpen}
+        onClose={() => setIsResetPasswordModalOpen(false)}
+        currentUser={currentUser}
+        onSuccess={handleSelfPasswordResetSuccess}
       />
 
     </div>

@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import {
   Users,
   UserPlus,
@@ -24,9 +25,28 @@ import {
   RefreshCw,
   Sparkles,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Upload,
+  Download,
+  FileSpreadsheet,
+  FileDown,
+  FileUp,
+  ChevronDown,
+  HelpCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { AppUser, UserRole, UserStatus } from '../types';
+
+export interface ParsedUploadRow {
+  tempId: string;
+  username: string;
+  role: UserRole;
+  status: UserStatus;
+  password: string;
+  isDuplicate: boolean;
+  isValid: boolean;
+  errorReason?: string;
+}
 
 interface UserManagementProps {
   users: AppUser[];
@@ -81,6 +101,306 @@ export default function UserManagement({
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Download Dropdown State & Ref
+  const [isDownloadDropdownOpen, setIsDownloadDropdownOpen] = useState(false);
+  const downloadDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Upload Excel Modal State & Ref
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadFileError, setUploadFileError] = useState<string | null>(null);
+  const [uploadParsedUsers, setUploadParsedUsers] = useState<ParsedUploadRow[]>([]);
+  const [uploadDuplicateAction, setUploadDuplicateAction] = useState<'update' | 'skip'>('update');
+  const [isParsingFile, setIsParsingFile] = useState(false);
+  const [showUploadPasswords, setShowUploadPasswords] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (downloadDropdownRef.current && !downloadDropdownRef.current.contains(event.target as Node)) {
+        setIsDownloadDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Download User & Password Function (.xlsx or .csv)
+  const handleDownloadUsers = (format: 'xlsx' | 'csv' = 'xlsx') => {
+    try {
+      const dateStr = new Date().toISOString().split('T')[0];
+      const exportRows = users.map((u, idx) => {
+        let roleLabel = 'Kantor Cabang';
+        if (u.role === 'admin') roleLabel = 'Admin';
+        else if (u.role === 'kepwil') roleLabel = 'Kepwil';
+        else if (u.role === 'kantor_pusat') roleLabel = 'Kantor Pusat';
+
+        return [
+          idx + 1,
+          u.username,
+          u.displayName || u.username,
+          roleLabel,
+          u.status === 'aktif' ? 'Aktif' : 'Nonaktif',
+          u.password || '',
+          u.updatedAt ? new Date(u.updatedAt).toLocaleString('id-ID') : (u.createdAt ? new Date(u.createdAt).toLocaleString('id-ID') : '-')
+        ];
+      });
+
+      if (format === 'csv') {
+        const csvHeaders = ['No', 'Nama user', 'Nama Lengkap / Kantor', 'Hak Akses', 'Status', 'Password', 'Terakhir Diperbarui'];
+        const ws = XLSX.utils.aoa_to_sheet([csvHeaders, ...exportRows]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Data_User_Password');
+        XLSX.writeFile(wb, `Data_User_dan_Password_SENADA_${dateStr}.csv`, { bookType: 'csv' });
+      } else {
+        const headerTitle = [
+          ['DATA PENGGUNA SISTEM SENADA & KATA SANDI (CREDENTIALS)'],
+          [`Waktu Ekspor: ${new Date().toLocaleString('id-ID')} | Total: ${users.length} User Terdaftar`],
+          [],
+          ['No', 'Nama user', 'Nama Lengkap / Kantor', 'Hak Akses', 'Status', 'Password', 'Terakhir Diperbarui']
+        ];
+        const ws = XLSX.utils.aoa_to_sheet([...headerTitle, ...exportRows]);
+        ws['!cols'] = [
+          { wch: 6 },
+          { wch: 25 },
+          { wch: 35 },
+          { wch: 18 },
+          { wch: 12 },
+          { wch: 20 },
+          { wch: 22 },
+        ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'User_Password');
+        XLSX.writeFile(wb, `Data_User_dan_Password_SENADA_${dateStr}.xlsx`);
+      }
+
+      showToast(`Berhasil mengunduh file data user & password (${format.toUpperCase()})`);
+      setIsDownloadDropdownOpen(false);
+    } catch (err: any) {
+      showToast('Gagal mendownload data user: ' + (err.message || 'Terjadi kesalahan'));
+    }
+  };
+
+  // Download Template Excel Petugas Baru
+  const handleDownloadTemplate = () => {
+    try {
+      const headers = ['Nama user', 'Hak Akses', 'Status', 'Password'];
+      const sampleData = [
+        ['Petugas KC Banda Aceh', 'Kantor Cabang', 'Aktif', 'Bpjs123!'],
+        ['Petugas Kepwil 1', 'Kepwil', 'Aktif', 'Bpjs123!'],
+        ['Petugas Kantor Pusat', 'Kantor Pusat', 'Aktif', 'Bpjs123!'],
+        ['Petugas KC Jakarta Pusat', 'Kantor Cabang', 'Aktif', 'Bpjs123!'],
+        ['Admin Tambahan', 'Admin', 'Aktif', 'Admin123!'],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleData]);
+      ws['!cols'] = [
+        { wch: 28 }, // Nama user
+        { wch: 18 }, // Hak Akses
+        { wch: 12 }, // Status
+        { wch: 18 }, // Password
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Template_Petugas');
+      XLSX.writeFile(wb, 'Template_Upload_User_Petugas_SENADA.xlsx');
+      showToast('Template Excel petugas baru berhasil diunduh!');
+      setIsDownloadDropdownOpen(false);
+    } catch (err: any) {
+      showToast('Gagal mengunduh template: ' + (err.message || 'Terjadi kesalahan'));
+    }
+  };
+
+  // Open Upload Modal
+  const handleOpenUploadModal = () => {
+    setUploadFileName('');
+    setUploadFileError(null);
+    setUploadParsedUsers([]);
+    setUploadDuplicateAction('update');
+    setIsParsingFile(false);
+    setShowUploadPasswords(false);
+    setIsUploadModalOpen(true);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Process selected Excel/CSV file
+  const processFileToUsers = (file: File) => {
+    setUploadFileName(file.name);
+    setUploadFileError(null);
+    setIsParsingFile(true);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = new Uint8Array(event.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        if (!sheetName) {
+          setUploadFileError('File Excel/CSV tidak memiliki sheet atau tab data yang valid.');
+          setIsParsingFile(false);
+          return;
+        }
+
+        const sheet = workbook.Sheets[sheetName];
+        const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
+        if (!rawRows || rawRows.length === 0) {
+          setUploadFileError('File Excel kosong atau tidak memiliki data.');
+          setIsParsingFile(false);
+          return;
+        }
+
+        // Detect header row by checking for "nama user", "user", "hak akses", "role", "password"
+        let headerRowIdx = -1;
+        let colMap = { namaUser: -1, hakAkses: -1, status: -1, password: -1 };
+
+        for (let r = 0; r < Math.min(10, rawRows.length); r++) {
+          const row = (rawRows[r] || []).map(c => String(c ?? '').toLowerCase().trim());
+          const uIdx = row.findIndex(c => c.includes('nama user') || c === 'username' || c === 'user' || c === 'nama' || c === 'nama petugas');
+          const hIdx = row.findIndex(c => c.includes('hak akses') || c.includes('role') || c.includes('peran') || c === 'akses');
+          const sIdx = row.findIndex(c => c.includes('status') || c.includes('keaktifan'));
+          const pIdx = row.findIndex(c => c.includes('password') || c.includes('kata sandi') || c === 'pass');
+
+          if (uIdx !== -1 || (hIdx !== -1 && pIdx !== -1)) {
+            headerRowIdx = r;
+            colMap = {
+              namaUser: uIdx !== -1 ? uIdx : 0,
+              hakAkses: hIdx !== -1 ? hIdx : 1,
+              status: sIdx !== -1 ? sIdx : 2,
+              password: pIdx !== -1 ? pIdx : 3,
+            };
+            break;
+          }
+        }
+
+        if (headerRowIdx === -1) {
+          headerRowIdx = 0;
+          colMap = { namaUser: 0, hakAkses: 1, status: 2, password: 3 };
+        }
+
+        const dataRows = rawRows.slice(headerRowIdx + 1);
+        const parsed: ParsedUploadRow[] = [];
+
+        dataRows.forEach((row, idx) => {
+          if (!row || row.every(c => String(c ?? '').trim() === '')) return;
+
+          const rawName = String(row[colMap.namaUser] ?? '').trim();
+          const rawRoleStr = String(row[colMap.hakAkses] ?? '').toLowerCase().trim();
+          const rawStatusStr = String(row[colMap.status] ?? '').toLowerCase().trim();
+          const rawPass = String(row[colMap.password] ?? '').trim();
+
+          if (!rawName) return;
+
+          let role: UserRole = 'kantor_cabang';
+          if (rawRoleStr.includes('pusat')) role = 'kantor_pusat';
+          else if (rawRoleStr.includes('kepwil') || rawRoleStr.includes('wilayah')) role = 'kepwil';
+          else if (rawRoleStr.includes('admin')) role = 'admin';
+          else if (rawRoleStr.includes('cabang') || rawRoleStr.includes('kc')) role = 'kantor_cabang';
+
+          let status: UserStatus = 'aktif';
+          if (rawStatusStr.includes('non') || rawStatusStr.includes('tidak') || rawStatusStr.includes('inact') || rawStatusStr === '0') {
+            status = 'nonaktif';
+          }
+
+          const password = rawPass || '123456';
+          const isDuplicate = users.some(u => u.username.toLowerCase() === rawName.toLowerCase());
+          const isValid = rawName.length >= 2;
+
+          parsed.push({
+            tempId: `upload_${idx}_${Date.now()}`,
+            username: rawName,
+            role,
+            status,
+            password,
+            isDuplicate,
+            isValid,
+            errorReason: !isValid ? 'Nama user minimal 2 karakter' : undefined,
+          });
+        });
+
+        if (parsed.length === 0) {
+          setUploadFileError('Tidak ditemukan baris data petugas yang dapat dibaca. Pastikan terdapat kolom: Nama user, Hak Akses, Status, Password.');
+        }
+
+        setUploadParsedUsers(parsed);
+      } catch (err: any) {
+        setUploadFileError('Gagal membaca file: ' + (err.message || 'Pastikan file berformat Excel (.xlsx, .xls) atau .csv yang valid.'));
+      } finally {
+        setIsParsingFile(false);
+      }
+    };
+
+    reader.onerror = () => {
+      setUploadFileError('Gagal membuka file. Silakan periksa kembali file Anda.');
+      setIsParsingFile(false);
+    };
+
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processFileToUsers(file);
+    }
+  };
+
+  // Confirm and save uploaded users into system
+  const handleConfirmUpload = () => {
+    if (uploadParsedUsers.length === 0) return;
+
+    const validRows = uploadParsedUsers.filter(r => r.isValid);
+    if (validRows.length === 0) {
+      showToast('Tidak ada data valid yang dapat disimpan.');
+      return;
+    }
+
+    let updatedUsers = [...users];
+    let addedCount = 0;
+    let updatedCount = 0;
+    let skippedCount = 0;
+
+    validRows.forEach(row => {
+      const existingIndex = updatedUsers.findIndex(u => u.username.toLowerCase() === row.username.toLowerCase());
+
+      if (existingIndex !== -1) {
+        if (uploadDuplicateAction === 'update') {
+          updatedUsers[existingIndex] = {
+            ...updatedUsers[existingIndex],
+            role: row.role,
+            status: row.status,
+            password: row.password,
+            updatedAt: new Date().toISOString(),
+          };
+          updatedCount++;
+        } else {
+          skippedCount++;
+        }
+      } else {
+        updatedUsers.push({
+          id: `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          username: row.username,
+          displayName: row.username,
+          role: row.role,
+          status: row.status,
+          password: row.password,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        addedCount++;
+      }
+    });
+
+    onUsersChange(updatedUsers);
+    setIsUploadModalOpen(false);
+    setUploadParsedUsers([]);
+    setUploadFileName('');
+
+    let msg = `Berhasil memproses Excel: ${addedCount} user petugas baru ditambahkan`;
+    if (updatedCount > 0) msg += `, ${updatedCount} user diperbarui`;
+    if (skippedCount > 0) msg += `, ${skippedCount} duplikat dilewati`;
+    showToast(msg);
   };
 
   // Pagination state
@@ -357,10 +677,88 @@ export default function UserManagement({
           </div>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+          {/* MENU DOWNLOAD USER & PASSWORD */}
+          <div className="relative" ref={downloadDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setIsDownloadDropdownOpen(!isDownloadDropdownOpen)}
+              className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold py-2.5 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+              id="btn-download-user"
+              title="Download daftar akun dan password pengguna"
+            >
+              <Download className="w-4 h-4" />
+              <span>Download User & Password</span>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isDownloadDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isDownloadDropdownOpen && (
+              <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 py-2 z-30 animate-fadeIn">
+                <div className="px-3.5 py-1.5 border-b border-slate-100 mb-1">
+                  <span className="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider block">
+                    Format Unduhan Data
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleDownloadUsers('xlsx')}
+                  className="w-full text-left px-3.5 py-2.5 hover:bg-emerald-50/70 transition-colors flex items-start gap-2.5 text-slate-700 group cursor-pointer"
+                >
+                  <div className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
+                    <FileSpreadsheet className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-slate-800 group-hover:text-emerald-700">Download Excel (.xlsx)</div>
+                    <div className="text-[11px] text-slate-400">Unduh seluruh {users.length} akun & password ke format Excel</div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleDownloadUsers('csv')}
+                  className="w-full text-left px-3.5 py-2.5 hover:bg-slate-100 transition-colors flex items-start gap-2.5 text-slate-700 group cursor-pointer"
+                >
+                  <div className="p-1.5 bg-slate-100 text-slate-700 rounded-lg shrink-0 mt-0.5 group-hover:scale-105 transition-transform">
+                    <FileDown className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-slate-800">Download CSV (.csv)</div>
+                    <div className="text-[11px] text-slate-400">Format teks sederhana terpisah koma</div>
+                  </div>
+                </button>
+
+                <div className="border-t border-slate-100 my-1 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleDownloadTemplate}
+                    className="w-full text-left px-3.5 py-2 hover:bg-blue-50/60 transition-colors flex items-center gap-2.5 text-blue-700 text-xs font-bold cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Unduh Template Excel Petugas Baru</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* MENU UPLOAD EXCEL PETUGAS BARU */}
           <button
+            type="button"
+            onClick={handleOpenUploadModal}
+            className="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-bold py-2.5 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+            id="btn-upload-user"
+            title="Upload file Excel untuk penambahan user petugas baru massal"
+          >
+            <Upload className="w-4 h-4" />
+            <span>Upload Petugas Baru (Excel)</span>
+          </button>
+
+          {/* TAMBAH USER MANUAL */}
+          <button
+            type="button"
             onClick={handleOpenAddModal}
-            className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold py-2.5 px-4 rounded-xl text-xs sm:text-sm transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+            className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold py-2.5 px-3.5 sm:px-4 rounded-xl text-xs sm:text-sm transition-all shadow-sm flex items-center gap-2 cursor-pointer"
             id="btn-tambah-user"
           >
             <UserPlus className="w-4 h-4" />
@@ -1053,6 +1451,296 @@ export default function UserManagement({
                 className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer flex-1"
               >
                 Hapus User
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 5: UPLOAD EXCEL PETUGAS BARU */}
+      {isUploadModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 animate-fadeIn overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-3xl w-full p-5 sm:p-7 space-y-5 animate-scaleIn max-h-[92vh] flex flex-col my-auto">
+            {/* Header */}
+            <div className="flex items-start justify-between pb-4 border-b border-slate-100 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 border border-indigo-100">
+                  <FileSpreadsheet className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">
+                    Upload Penambahan User Petugas Baru
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Import data petugas secara massal menggunakan file Excel (.xlsx, .xls) atau .csv
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsUploadModalOpen(false)}
+                className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Scrollable Body */}
+            <div className="space-y-4 overflow-y-auto pr-1 flex-1">
+              {/* Information Banner with Required Columns */}
+              <div className="bg-gradient-to-r from-indigo-50/80 via-blue-50/50 to-slate-50 border border-indigo-100 rounded-2xl p-4 space-y-2.5">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-600" />
+                    <span className="text-xs font-black text-indigo-950 uppercase tracking-wider">
+                      Ketentuan 4 Kolom File Excel:
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDownloadTemplate}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-bold transition-all shadow-3xs cursor-pointer active:scale-95"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download Template Excel</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                  <div className="bg-white/80 border border-indigo-100/80 p-2.5 rounded-xl">
+                    <div className="text-[10px] font-extrabold text-indigo-500 uppercase">Kolom 1</div>
+                    <div className="text-xs font-black text-slate-800">Nama user</div>
+                    <div className="text-[10px] text-slate-500">Nama/Kode Petugas</div>
+                  </div>
+                  <div className="bg-white/80 border border-indigo-100/80 p-2.5 rounded-xl">
+                    <div className="text-[10px] font-extrabold text-indigo-500 uppercase">Kolom 2</div>
+                    <div className="text-xs font-black text-slate-800">Hak Akses</div>
+                    <div className="text-[10px] text-slate-500">Kantor Cabang / Kepwil / Kantor Pusat / Admin</div>
+                  </div>
+                  <div className="bg-white/80 border border-indigo-100/80 p-2.5 rounded-xl">
+                    <div className="text-[10px] font-extrabold text-indigo-500 uppercase">Kolom 3</div>
+                    <div className="text-xs font-black text-slate-800">Status</div>
+                    <div className="text-[10px] text-slate-500">Aktif / Nonaktif</div>
+                  </div>
+                  <div className="bg-white/80 border border-indigo-100/80 p-2.5 rounded-xl">
+                    <div className="text-[10px] font-extrabold text-indigo-500 uppercase">Kolom 4</div>
+                    <div className="text-xs font-black text-slate-800">Password</div>
+                    <div className="text-[10px] text-slate-500">Kata Sandi Akun</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Upload Drop Zone / Input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx, .xls, .csv"
+                onChange={handleFileInputChange}
+                className="hidden"
+                id="file-upload-excel-petugas"
+              />
+
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center cursor-pointer transition-all ${
+                  uploadFileName
+                    ? 'border-indigo-400 bg-indigo-50/20 hover:bg-indigo-50/40'
+                    : 'border-slate-300 hover:border-indigo-400 bg-slate-50/60 hover:bg-slate-50'
+                }`}
+              >
+                <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center mx-auto mb-3 shadow-3xs">
+                  <Upload className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-sm font-bold text-slate-800">
+                    {uploadFileName ? (
+                      <span className="text-indigo-700 font-black flex items-center justify-center gap-1.5">
+                        <FileSpreadsheet className="w-4 h-4" />
+                        {uploadFileName}
+                      </span>
+                    ) : (
+                      'Klik atau tarik file Excel ke area ini'
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {uploadFileName
+                      ? 'Klik kembali jika ingin mengganti file'
+                      : 'Mendukung format file .xlsx, .xls, atau .csv'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Parsing Loading State */}
+              {isParsingFile && (
+                <div className="py-6 flex items-center justify-center gap-2 text-indigo-600 text-xs font-bold">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Sedang membaca dan memvalidasi kolom Excel...</span>
+                </div>
+              )}
+
+              {/* Error Message */}
+              {uploadFileError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-bold flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-500" />
+                  <span>{uploadFileError}</span>
+                </div>
+              )}
+
+              {/* Preview Parsed Data */}
+              {uploadParsedUsers.length > 0 && !isParsingFile && (
+                <div className="space-y-3 pt-2">
+                  {/* Summary Bar */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                    <div className="flex items-center gap-3 text-xs font-bold text-slate-700 flex-wrap">
+                      <span className="text-slate-900 font-black">
+                        Total {uploadParsedUsers.length} Data Terbaca:
+                      </span>
+                      <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                        {uploadParsedUsers.filter(u => !u.isDuplicate && u.isValid).length} User Baru
+                      </span>
+                      {uploadParsedUsers.filter(u => u.isDuplicate).length > 0 && (
+                        <span className="text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                          {uploadParsedUsers.filter(u => u.isDuplicate).length} Nama Sudah Terdaftar
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowUploadPasswords(!showUploadPasswords)}
+                      className="text-xs font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                    >
+                      {showUploadPasswords ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      <span>{showUploadPasswords ? 'Sembunyikan' : 'Tampilkan'} Password</span>
+                    </button>
+                  </div>
+
+                  {/* Duplicate Handling Option (if any duplicates) */}
+                  {uploadParsedUsers.some(u => u.isDuplicate) && (
+                    <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl text-xs space-y-2">
+                      <div className="font-extrabold text-amber-900 flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600" />
+                        <span>Ditemukan nama user yang sudah ada di sistem:</span>
+                      </div>
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 text-xs font-bold text-slate-700 pl-5">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="duplicateAction"
+                            checked={uploadDuplicateAction === 'update'}
+                            onChange={() => setUploadDuplicateAction('update')}
+                            className="text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          />
+                          <span>Perbarui data user yang sudah ada (update role, status & password)</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="duplicateAction"
+                            checked={uploadDuplicateAction === 'skip'}
+                            onChange={() => setUploadDuplicateAction('skip')}
+                            className="text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          />
+                          <span>Lewati data user yang sudah ada (hanya tambah user baru)</span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Preview Table */}
+                  <div className="border border-slate-200 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-slate-100 text-slate-600 font-extrabold sticky top-0 z-10 text-[11px] uppercase">
+                        <tr>
+                          <th className="py-2 px-3">No</th>
+                          <th className="py-2 px-3">Nama user</th>
+                          <th className="py-2 px-3">Hak Akses</th>
+                          <th className="py-2 px-3">Status</th>
+                          <th className="py-2 px-3">Password</th>
+                          <th className="py-2 px-3">Status Validasi</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                        {uploadParsedUsers.map((item, idx) => (
+                          <tr key={item.tempId} className="hover:bg-slate-50/80">
+                            <td className="py-2 px-3 text-slate-400 font-bold">{idx + 1}</td>
+                            <td className="py-2 px-3 font-extrabold text-slate-900">{item.username}</td>
+                            <td className="py-2 px-3">
+                              <span
+                                className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase ${
+                                  item.role === 'admin'
+                                    ? 'bg-purple-100 text-purple-800'
+                                    : item.role === 'kepwil'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : item.role === 'kantor_pusat'
+                                    ? 'bg-indigo-100 text-indigo-800'
+                                    : 'bg-sky-100 text-sky-800'
+                                }`}
+                              >
+                                {item.role === 'admin'
+                                  ? 'Admin'
+                                  : item.role === 'kepwil'
+                                  ? 'Kepwil'
+                                  : item.role === 'kantor_pusat'
+                                  ? 'Kantor Pusat'
+                                  : 'Kantor Cabang'}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3">
+                              <span
+                                className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase ${
+                                  item.status === 'aktif'
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : 'bg-rose-50 text-rose-700 border border-rose-200'
+                                }`}
+                              >
+                                {item.status.toUpperCase()}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 font-mono text-[11px]">
+                              {showUploadPasswords ? item.password : '••••••••'}
+                            </td>
+                            <td className="py-2 px-3">
+                              {item.isDuplicate ? (
+                                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                                  {uploadDuplicateAction === 'update' ? 'Akan Diperbarui' : 'Dilewati'}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 flex items-center gap-1 w-fit">
+                                  <Check className="w-3 h-3" />
+                                  Siap Ditambah
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsUploadModalOpen(false)}
+                className="px-4 py-2 text-xs sm:text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                Batal
+              </button>
+
+              <button
+                type="button"
+                disabled={uploadParsedUsers.filter(u => u.isValid).length === 0}
+                onClick={handleConfirmUpload}
+                className="px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-2 active:scale-95"
+              >
+                <Check className="w-4 h-4" />
+                <span>
+                  Simpan {uploadParsedUsers.filter(u => u.isValid).length} Petugas ke Sistem
+                </span>
               </button>
             </div>
           </div>

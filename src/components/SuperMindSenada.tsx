@@ -65,6 +65,9 @@ export default function SuperMindSenada({
   const [timeframeFilter, setTimeframeFilter] = useState<'all' | 'pendek' | 'menengah'>('all');
   const [aspectFilter, setAspectFilter] = useState<'all' | 'people' | 'proses' | 'tools'>('all');
   const [selectedTopikFilter, setSelectedTopikFilter] = useState<string>('Semua');
+  const [smsActiveSubMenu, setSmsActiveSubMenu] = useState<'analisa' | 'sosialisasi'>('analisa');
+
+
 
   const kcList = parseFilterValueList(selectedKantorCabang);
   const kwList = parseFilterValueList(selectedKepwil);
@@ -110,6 +113,45 @@ export default function SuperMindSenada({
   const activeBranchMetrics = useMemo(() => {
     return extractBranchMetrics(selectedKantorCabang, selectedKepwil, citiesData, selectedBulan);
   }, [selectedKantorCabang, selectedKepwil, citiesData, selectedBulan]);
+
+  // Computed themes for direct socialization covering Administrasi, Iuran, and Pelayanan Kesehatan based on top topics
+  const socializationThemes = useMemo(() => {
+    const topTopics = activeBranchMetrics.topTopikList || [];
+    const topAdmin = topTopics.find(t => t.pokokMasalah === 'Administrasi') || { topikMasalah: 'Pembaruan Data Kepesertaan & PANDAWA', count: 120 };
+    const topIuran = topTopics.find(t => t.pokokMasalah === 'Iuran') || { topikMasalah: 'Autodebet & Tata Cara Pembayaran Iuran', count: 95 };
+    const topFaskes = topTopics.find(t => t.pokokMasalah === 'Pelayanan Kesehatan') || { topikMasalah: 'Alur Rujukan FKTP ke FKRTL & Mobile JKN', count: 150 };
+
+    return [
+      {
+        id: 'theme-1',
+        themeTitle: 'Tema Utama: Ekosistem Digital JKN & Resolusi Layanan Terpadu',
+        subtitle: 'Berdasarkan topik masalah terbanyak: ' + (topFaskes.topikMasalah || 'Pelayanan Kesehatan'),
+        targetPeserta: 'Peserta Pekerja Penerima Upah (PPU), PBPU/Mandiri, dan Pengurus Badan Usaha di ' + activeBranchMetrics.unitDisplayName,
+        adminPillar: `Administrasi: Sosialisasi kemudahan pendaftaran, perubahan data, dan layanan WhatsApp PANDAWA untuk topik "${topAdmin.topikMasalah}" (${topAdmin.count || 0} kasus tercatat).`,
+        iuranPillar: `Iuran: Edukasi transparansi tagihan, kanal pembayaran Virtual Account, dan pencegahan kendala autodebet pada topik "${topIuran.topikMasalah}" (${topIuran.count || 0} kasus tercatat).`,
+        faskesPillar: `Pelayanan Kesehatan: Panduan antrean online Mobile JKN, alur rujukan berjenjang FKTP ke FKRTL, dan penanganan topik "${topFaskes.topikMasalah}" (${topFaskes.count || 0} kasus tercatat).`,
+        actionSteps: [
+          `Lakukan sosialisasi langsung (Fasilitasi Tatap Muka / Keliling) di ${activeBranchMetrics.unitDisplayName} dengan membagikan panduan digital 3-in-1 (Administrasi, Iuran, Faskes).`,
+          `Gunakan topik masalah terbanyak (${topFaskes.topikMasalah}) sebagai studi kasus utama interaktif bersama peserta.`,
+          `Sediakan Pojok Konsultasi & Duta Mobile JKN saat sosialisasi langsung untuk membantu aktivasi dan pengecekan status secara real-time.`
+        ]
+      },
+      {
+        id: 'theme-2',
+        themeTitle: 'Tema Prioritas: Optimalisasi Pemahaman Hak & Kewajiban Peserta JKN',
+        subtitle: 'Berdasarkan analisis pemanfaatan informasi & pengaduan tertinggi',
+        targetPeserta: 'Kader JKN, Tokoh Masyarakat, Peserta Segmen Mandiri & Pekerja di ' + activeBranchMetrics.unitDisplayName,
+        adminPillar: `Administrasi: Penyuluhan prosedur reaktivasi peserta, penambahan anggota keluarga, dan verifikasi NIK/KK secara mandiri.`,
+        iuranPillar: `Iuran: Penjelasan mendalam mengenai besaran iuran sesuai kelas rawat, cicilan pembayaran iuran, dan rekonsiliasi tagihan.`,
+        faskesPillar: `Pelayanan Kesehatan: Sosialisasi hak kelas rawat inap, pelayanan obat kronis PRB, dan prosedur pengaduan faskes yang transparan.`,
+        actionSteps: [
+          `Selenggarakan Focus Group Discussion (FGD) berkala dengan mengintegrasikan ketiga pokok masalah dalam satu sesi terpadu.`,
+          `Bagikan lembar infografis ringkas yang memuat solusi cepat atas kendala administrasi, iuran, dan pelayanan kesehatan.`,
+          `Evaluasi tingkat pemahaman peserta pasca sosialisasi melalui kuesioner kepuasan digital.`
+        ]
+      }
+    ];
+  }, [activeBranchMetrics]);
 
   // Initial recommendation state loaded with fallback grounded on Topik Masalah Pengaduan & Informasi
   const [recommendationData, setRecommendationData] = useState<SmsRecommendationResponse>(() => {
@@ -202,6 +244,24 @@ ${item.actionSteps.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}`;
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const handleCopyTheme = (theme: { themeTitle: string; targetPeserta: string; adminPillar: string; iuranPillar: string; faskesPillar: string; actionSteps: string[] }) => {
+    const text = `=== REKOMENDASI TEMA SOSIALISASI LANGSUNG PESERTA ===
+Tema: ${theme.themeTitle}
+Unit Layanan: ${activeBranchMetrics.unitDisplayName}
+Sasaran: ${theme.targetPeserta}
+
+3 PILAR UTAMA:
+1. ${theme.adminPillar}
+2. ${theme.iuranPillar}
+3. ${theme.faskesPillar}
+
+LANGKAH PELAKSANAAN:
+${theme.actionSteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
+
+    navigator.clipboard.writeText(text);
+    alert('Tema sosialisasi berhasil disalin ke clipboard!');
+  };
+
   const handleCopyFullReport = () => {
     if (!recommendationData) return;
 
@@ -214,13 +274,13 @@ Tanggal Dibuat: ${recommendationData.generatedAt}
 Kesimpulan yang Harus Dilakukan:
 ${recommendationData.kesimpulanPendek || '-'}
 Aksi Utama yang Harus Dilakukan:
-${(recommendationData.aksiUtamaPendek || []).map((a, i) => `  ${i + 1}. ${a}`).join('\n')}
+${(recommendationData.aksiUtamaPendek || []).map((a, i) => `  ${i + 1}. ${a}`).join('\n')};
 
 2. JANGKA MENENGAH (4 - 6 BULAN)
 Kesimpulan yang Harus Dilakukan:
 ${recommendationData.kesimpulanMenengah || '-'}
 Aksi Utama yang Harus Dilakukan:
-${(recommendationData.aksiUtamaMenengah || []).map((a, i) => `  ${i + 1}. ${a}`).join('\n')}
+${(recommendationData.aksiUtamaMenengah || []).map((a, i) => `  ${i + 1}. ${a}`).join('\n')};
 
 ---------------------------------------------------------
 RINCIAN AKSI YANG HARUS DILAKUKAN PER ASPEK:
@@ -234,8 +294,7 @@ Aksi yang Harus Dilakukan:
 ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
 `
   )
-  .join('\n---------------------------------------------------------\n')}
-`;
+  .join('\n---------------------------------------------------------\n')}`;
 
     navigator.clipboard.writeText(report);
     setCopiedReport(true);
@@ -312,7 +371,7 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
               className="bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-bold px-4 py-2.5 rounded-xl text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 disabled:opacity-60 flex-1 sm:flex-initial"
               id="generate-sms-ai-btn"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={"w-4 h-4 " + (loading ? 'animate-spin' : '')} />
               <span>{loading ? 'Menganalisa...' : 'Analisa & Rekomendasi AI'}</span>
             </button>
 
@@ -376,8 +435,146 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
         </div>
       </div>
 
-      {/* PANEL UTAMA: REKOMENDASI PERBAIKAN PENGADUAN & INFORMASI */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* SUB MENU NAVIGATION TABS */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-slate-200 rounded-2xl p-3 shadow-xs">
+        <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
+          <button
+            onClick={() => setSmsActiveSubMenu('analisa')}
+            className={"px-4 py-2.5 rounded-xl font-black text-xs sm:text-sm transition-all cursor-pointer flex items-center gap-2 shrink-0 " + (
+              smsActiveSubMenu === 'analisa'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+            )}
+          >
+            <BrainCircuit className="w-4 h-4" />
+            <span>1. Analisa &amp; Aksi Strategis Layanan</span>
+          </button>
+          <button
+            onClick={() => setSmsActiveSubMenu('sosialisasi')}
+            className={"px-4 py-2.5 rounded-xl font-black text-xs sm:text-sm transition-all cursor-pointer flex items-center gap-2 shrink-0 " + (
+              smsActiveSubMenu === 'sosialisasi'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+            )}
+          >
+            <Users className="w-4 h-4" />
+            <span>2. Tema Sosialisasi Langsung Peserta (Wajib Administrasi, Iuran &amp; Faskes)</span>
+          </button>
+        </div>
+
+        <div className="text-xs text-slate-500 font-bold px-2 shrink-0">
+          Unit: <strong className="text-slate-800">{activeBranchMetrics.unitDisplayName}</strong>
+        </div>
+      </div>
+
+      {/* SUB MENU 2: REKOMENDASI TEMA SOSIALISASI LANGSUNG KEPADA PESERTA */}
+      {smsActiveSubMenu === 'sosialisasi' ? (
+        <div className="space-y-6 animate-fadeIn">
+          <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-blue-950 text-white rounded-2xl p-6 shadow-md space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/30 border border-indigo-400/40 text-indigo-200 text-xs font-extrabold uppercase tracking-wide">
+                <Users className="w-3.5 h-3.5 text-indigo-300" />
+                <span>Sub Menu SMS — Rekomendasi Tema Sosialisasi Langsung Peserta</span>
+              </span>
+            </div>
+            <h3 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2.5">
+              <Sparkles className="w-6 h-6 text-indigo-400 shrink-0" />
+              <span>Tema Sosialisasi Berdasarkan Pemanfaatan Informasi &amp; Topik Terbanyak</span>
+            </h3>
+            <p className="text-slate-300 text-sm leading-relaxed max-w-4xl font-medium">
+              Panduan tema sosialisasi langsung (tatap muka, penyuluhan, dan edukasi kelompok peserta) di <strong>{activeBranchMetrics.unitDisplayName}</strong>. Setiap tema dirancang wajib mencakup 3 pilar pokok masalah utama: <strong>Administrasi</strong>, <strong>Iuran</strong>, dan <strong>Pelayanan Kesehatan</strong>, bersumber dari topik masalah dengan volume pemanfaatan tertinggi.
+            </p>
+          </div>
+
+          {/* LIST OF THEMES */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {socializationThemes.map((theme, idx) => (
+              <div key={theme.id} className="bg-white border border-indigo-200 rounded-2xl p-6 shadow-sm flex flex-col justify-between space-y-5">
+                <div className="space-y-4">
+                  <div className="flex items-start justify-between gap-3 border-b border-indigo-100 pb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white font-black flex items-center justify-center shrink-0 shadow-xs">
+                        {idx + 1}
+                      </div>
+                      <div>
+                        <span className="text-xs font-extrabold text-indigo-700 uppercase tracking-wider block">
+                          Tema Sosialisasi Langsung #{idx + 1}
+                        </span>
+                        <h4 className="text-base sm:text-lg font-black text-slate-900">
+                          {theme.themeTitle}
+                        </h4>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 text-xs sm:text-sm font-semibold text-slate-600 bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
+                    <p>🎯 <strong className="text-slate-800">Sasaran Peserta:</strong> {theme.targetPeserta}</p>
+                    <p>📊 <strong className="text-slate-800">Basis Analisis:</strong> {theme.subtitle}</p>
+                  </div>
+
+                  {/* 3 MANDATORY PILLARS */}
+                  <div className="space-y-3 pt-1">
+                    <span className="text-xs font-black text-slate-800 uppercase tracking-wider block">
+                      3 Pilar Wajib Tema Sosialisasi:
+                    </span>
+
+                    <div className="space-y-2.5 text-xs sm:text-sm">
+                      <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 text-emerald-900 font-medium flex items-start gap-2">
+                        <span className="px-2 py-0.5 rounded bg-emerald-600 text-white font-black text-2xs uppercase tracking-wider shrink-0 mt-0.5">
+                          Admin
+                        </span>
+                        <span>{theme.adminPillar}</span>
+                      </div>
+
+                      <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 text-amber-900 font-medium flex items-start gap-2">
+                        <span className="px-2 py-0.5 rounded bg-amber-600 text-white font-black text-2xs uppercase tracking-wider shrink-0 mt-0.5">
+                          Iuran
+                        </span>
+                        <span>{theme.iuranPillar}</span>
+                      </div>
+
+                      <div className="bg-sky-50/70 border border-sky-200 rounded-xl p-3 text-sky-900 font-medium flex items-start gap-2">
+                        <span className="px-2 py-0.5 rounded bg-sky-600 text-white font-black text-2xs uppercase tracking-wider shrink-0 mt-0.5">
+                          Faskes
+                        </span>
+                        <span>{theme.faskesPillar}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ACTION STEPS */}
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    <span className="text-xs font-black text-slate-800 uppercase tracking-wider block">
+                      Langkah &amp; Metode Pelaksanaan Sosialisasi:
+                    </span>
+                    <ul className="space-y-2">
+                      {theme.actionSteps.map((step, sIdx) => (
+                        <li key={sIdx} className="flex items-start gap-2 text-xs sm:text-sm text-slate-700 font-medium bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+                          <span className="w-5 h-5 rounded-lg bg-indigo-100 text-indigo-700 font-black text-xs flex items-center justify-center shrink-0 tabular-nums mt-0.5">
+                            {sIdx + 1}
+                          </span>
+                          <span className="leading-snug">{step}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => handleCopyTheme(theme)}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-sm transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                >
+                  <Copy className="w-4 h-4" />
+                  <span>Salin Tema &amp; Panduan Sosialisasi</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6 animate-fadeIn">
+          {/* PANEL UTAMA: REKOMENDASI PERBAIKAN PENGADUAN & INFORMASI */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* 1. REKOMENDASI PERBAIKAN MUTU LAYANAN & KEPUASAN PESERTA (PENGADUAN) */}
         <div className="bg-white border border-rose-200 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col justify-between space-y-4">
           <div className="space-y-4">
@@ -422,11 +619,11 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
               setKategoriFocus(kategoriFocus === 'Pengaduan' ? 'Semua' : 'Pengaduan');
               setSelectedTopikFilter('Semua');
             }}
-            className={`w-full py-2.5 px-4 rounded-xl font-extrabold text-sm transition-all cursor-pointer border flex items-center justify-center gap-2 ${
+            className={"w-full py-2.5 px-4 rounded-xl font-extrabold text-sm transition-all cursor-pointer border flex items-center justify-center gap-2 " + (
               kategoriFocus === 'Pengaduan'
                 ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
                 : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200'
-            }`}
+            )}
           >
             <span>
               {kategoriFocus === 'Pengaduan'
@@ -480,11 +677,11 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
               setKategoriFocus(kategoriFocus === 'Informasi' ? 'Semua' : 'Informasi');
               setSelectedTopikFilter('Semua');
             }}
-            className={`w-full py-2.5 px-4 rounded-xl font-extrabold text-sm transition-all cursor-pointer border flex items-center justify-center gap-2 ${
+            className={"w-full py-2.5 px-4 rounded-xl font-extrabold text-sm transition-all cursor-pointer border flex items-center justify-center gap-2 " + (
               kategoriFocus === 'Informasi'
                 ? 'bg-sky-600 text-white border-sky-600 shadow-xs'
                 : 'bg-sky-50 hover:bg-sky-100 text-sky-800 border-sky-200'
-            }`}
+            )}
           >
             <span>
               {kategoriFocus === 'Informasi'
@@ -601,11 +798,11 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                       setKategoriFocus('Semua');
                       setSelectedTopikFilter('Semua');
                     }}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer " + (
                       kategoriFocus === 'Semua'
                         ? 'bg-indigo-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     Pengaduan &amp; Informasi
                   </button>
@@ -614,11 +811,11 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                       setKategoriFocus('Pengaduan');
                       setSelectedTopikFilter('Semua');
                     }}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer " + (
                       kategoriFocus === 'Pengaduan'
                         ? 'bg-rose-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     Fokus Pengaduan
                   </button>
@@ -627,11 +824,11 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                       setKategoriFocus('Informasi');
                       setSelectedTopikFilter('Semua');
                     }}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer " + (
                       kategoriFocus === 'Informasi'
                         ? 'bg-sky-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     Fokus Informasi
                   </button>
@@ -647,31 +844,31 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                 <div className="flex items-center gap-1.5 bg-slate-100/80 p-1 rounded-xl border border-slate-200 flex-wrap">
                   <button
                     onClick={() => setTimeframeFilter('all')}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer " + (
                       timeframeFilter === 'all'
                         ? 'bg-indigo-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     Semua ({recommendationData?.recommendations?.length || 0})
                   </button>
                   <button
                     onClick={() => setTimeframeFilter('pendek')}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer " + (
                       timeframeFilter === 'pendek'
                         ? 'bg-amber-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     Jangka Pendek 1-3 Bulan ({aspectStats.pendek})
                   </button>
                   <button
                     onClick={() => setTimeframeFilter('menengah')}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer " + (
                       timeframeFilter === 'menengah'
                         ? 'bg-blue-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     Jangka Menengah 4-6 Bulan ({aspectStats.menengah})
                   </button>
@@ -687,43 +884,43 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                 <div className="flex items-center gap-1.5 bg-slate-100/80 p-1 rounded-xl border border-slate-200 flex-wrap">
                   <button
                     onClick={() => setAspectFilter('all')}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer " + (
                       aspectFilter === 'all'
                         ? 'bg-indigo-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     Semua
                   </button>
                   <button
                     onClick={() => setAspectFilter('people')}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-1 " + (
                       aspectFilter === 'people'
                         ? 'bg-purple-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     <Users className="w-3.5 h-3.5" />
                     <span>People ({aspectStats.people})</span>
                   </button>
                   <button
                     onClick={() => setAspectFilter('proses')}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-1 " + (
                       aspectFilter === 'proses'
                         ? 'bg-emerald-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     <Workflow className="w-3.5 h-3.5" />
                     <span>Proses ({aspectStats.proses})</span>
                   </button>
                   <button
                     onClick={() => setAspectFilter('tools')}
-                    className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                    className={"px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all cursor-pointer flex items-center gap-1 " + (
                       aspectFilter === 'tools'
                         ? 'bg-sky-600 text-white shadow-3xs'
                         : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
+                    )}
                   >
                     <Wrench className="w-3.5 h-3.5" />
                     <span>Tools ({aspectStats.tools})</span>
@@ -749,8 +946,8 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
                     Semua Topik {kategoriFocus !== 'Semua' ? kategoriFocus : 'Pengaduan & Informasi'} Tertinggi ({selectableTopics.length} Topik)
                   </option>
                   {selectableTopics.map((t, i) => (
-                    <option key={`${t.id}-${i}`} value={t.topikMasalah}>
-                      #{i + 1} [{t.jenisKategori}] {t.topikMasalah} — {t.pokokMasalah} ({Math.round(Number(t.count)).toLocaleString('id-ID')} Tiket)
+                    <option key={t.id + "-" + i} value={t.topikMasalah}>
+                      #{i + 1} [{t.jenisKategori}] {t.topikMasalah} — {t.pokokMasalah} ({Math.round(Number(t.count)).toLocaleString('id-ID')}) Tiket
                     </option>
                   ))}
                 </select>
@@ -935,7 +1132,9 @@ ${rec.actionSteps.map((step, sIdx) => `  ${sIdx + 1}. ${step}`).join('\n')}
         )}
       </div>
     </div>
-  );
+  )}
+</div>
+);
 }
 
 // INDIVIDUAL RECOMMENDATION CARD COMPONENT
@@ -996,12 +1195,12 @@ function RecommendationCard({
       <div className="space-y-3.5">
         {/* CARD TOP BADGES */}
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-black uppercase tracking-wide ${aspectColor.badge}`}>
+          <span className={"inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-black uppercase tracking-wide " + aspectColor.badge}>
             {aspectColor.icon}
             <span>{item.aspectLabel}</span>
           </span>
 
-          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-black border ${impactStyle}`}>
+          <span className={"inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-black border " + impactStyle}>
             <AlertTriangle className="w-3.5 h-3.5" />
             <span>Prioritas: {item.impactLevel}</span>
           </span>
@@ -1010,15 +1209,13 @@ function RecommendationCard({
         {/* ACUAN TOPIK MASALAH GOOGLE SHEET BADGE */}
         {item.topikMasalah && (
           <div
-            className={`rounded-xl p-3 space-y-1.5 border ${
-              isPengaduan ? 'bg-rose-50/80 border-rose-200' : 'bg-sky-50/80 border-sky-200'
-            }`}
+            className={"rounded-xl p-3 space-y-1.5 border " + (isPengaduan ? 'bg-rose-50/80 border-rose-200' : 'bg-sky-50/80 border-sky-200')}
           >
             <div className="flex items-center justify-between gap-1.5 flex-wrap">
               <span
-                className={`text-xs font-black uppercase tracking-wider flex items-center gap-1 ${
+                className={"text-xs font-black uppercase tracking-wider flex items-center gap-1 " + (
                   isPengaduan ? 'text-rose-800' : 'text-sky-800'
-                }`}
+                )}
               >
                 <Layers className="w-3.5 h-3.5 shrink-0" />
                 {isPengaduan ? 'Topik Pengaduan (Mutu Layanan)' : 'Topik Informasi (Pemahaman Peserta)'}

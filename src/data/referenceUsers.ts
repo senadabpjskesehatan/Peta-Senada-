@@ -1,7 +1,7 @@
 import { AppUser } from '../types';
 
 export const REFERENCE_USERS: AppUser[] = [
-  // 1. ADMINISTRATOR UTAMA
+  // 1. ADMINISTRATOR UTAMA & KANTOR PUSAT
   {
     id: 'user_admin_senada',
     username: 'senada',
@@ -9,6 +9,16 @@ export const REFERENCE_USERS: AppUser[] = [
     role: 'admin',
     status: 'aktif',
     password: '150bisa',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'user_kantor_pusat_1',
+    username: 'PUSAT',
+    displayName: 'KANTOR PUSAT BPJS KESEHATAN',
+    role: 'kantor_pusat',
+    status: 'aktif',
+    password: 'pusat123',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   },

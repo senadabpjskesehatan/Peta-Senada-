@@ -4,7 +4,7 @@ export type TicketStatus = 'Belum Diproses' | 'Sedang Diproses' | 'Selesai';
 
 export type SlaStatus = 'On Time' | 'Warning' | 'Overdue';
 
-export type UserRole = 'admin' | 'kepwil' | 'kantor_cabang';
+export type UserRole = 'admin' | 'kepwil' | 'kantor_cabang' | 'kantor_pusat';
 export type UserStatus = 'aktif' | 'nonaktif';
 
 export interface AppUser {
@@ -166,7 +166,7 @@ export interface UnitUtilizationSummary {
   unitId: string;
   username: string;
   displayName: string;
-  role: 'kepwil' | 'kantor_cabang' | 'admin';
+  role: 'kepwil' | 'kantor_cabang' | 'kantor_pusat' | 'admin';
   officeName: string;
   parentKepwil?: string;
   loginCount: number;

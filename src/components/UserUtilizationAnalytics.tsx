@@ -42,7 +42,7 @@ export const UserUtilizationAnalytics: React.FC<UserUtilizationAnalyticsProps> =
   // Sort metric for leaderboard: 'total' | 'login' | 'menu'
   const [sortByMetric, setSortByMetric] = useState<'total' | 'login' | 'menu'>('total');
   // Filter for detailed table
-  const [tableRoleFilter, setTableRoleFilter] = useState<'all' | 'kepwil' | 'kantor_cabang'>('all');
+  const [tableRoleFilter, setTableRoleFilter] = useState<'all' | 'kepwil' | 'kantor_cabang' | 'kantor_pusat'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   // Active view tab in bottom section: 'table' vs 'logs'
   const [bottomTab, setBottomTab] = useState<'table' | 'logs'>('table');
@@ -93,9 +93,9 @@ export const UserUtilizationAnalytics: React.FC<UserUtilizationAnalyticsProps> =
     };
   }, [summaries]);
 
-  // TOP 5 Leaderboard based on metric (Unified between Kedeputian Wilayah and Kantor Cabang)
+  // TOP 5 Leaderboard based on metric (excluding Kantor Pusat as per requirement)
   const top5List = useMemo(() => {
-    const list = [...summaries];
+    const list = summaries.filter((s) => s.role !== 'kantor_pusat');
 
     list.sort((a, b) => {
       if (sortByMetric === 'login') return b.loginCount - a.loginCount;
@@ -589,6 +589,15 @@ export const UserUtilizationAnalytics: React.FC<UserUtilizationAnalyticsProps> =
                 >
                   Kantor Cabang
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setTableRoleFilter('kantor_pusat')}
+                  className={`px-2.5 py-1 rounded-lg transition-all ${
+                    tableRoleFilter === 'kantor_pusat' ? 'bg-indigo-600 text-white shadow-3xs' : 'text-slate-500'
+                  }`}
+                >
+                  Kantor Pusat
+                </button>
               </div>
 
               {/* Search Bar */}
@@ -636,10 +645,12 @@ export const UserUtilizationAnalytics: React.FC<UserUtilizationAnalyticsProps> =
                         className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase ${
                           row.role === 'kepwil'
                             ? 'bg-emerald-100 text-emerald-800'
+                            : row.role === 'kantor_pusat'
+                            ? 'bg-indigo-100 text-indigo-800'
                             : 'bg-sky-100 text-sky-800'
                         }`}
                       >
-                        {row.role === 'kepwil' ? 'Kepwil' : 'Kantor Cabang'}
+                        {row.role === 'kepwil' ? 'Kepwil' : row.role === 'kantor_pusat' ? 'Kantor Pusat' : 'Kantor Cabang'}
                       </span>
                     </td>
                     <td className="py-3.5 px-4 text-center font-bold text-blue-700 tabular-nums">

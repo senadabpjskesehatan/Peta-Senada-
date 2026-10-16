@@ -34,6 +34,21 @@ export const MENU_NAME_MAP: Record<string, string> = {
 export function generateInitialUtilizationSummaries(): UnitUtilizationSummary[] {
   const summaries: UnitUtilizationSummary[] = [];
 
+  // 0. Kantor Pusat
+  summaries.push({
+    unitId: 'user_kantor_pusat_1',
+    username: 'PUSAT',
+    displayName: 'KANTOR PUSAT BPJS KESEHATAN',
+    role: 'kantor_pusat',
+    officeName: 'KANTOR PUSAT BPJS KESEHATAN',
+    loginCount: 45,
+    menuUsageCount: 230,
+    totalPemanfaatan: 275,
+    menuBreakdown: { 'map': 95, 'sms': 80, 'custom-charts': 55, 'pemanfaatan': 40 },
+    lastLoginAt: '2026-10-15T08:30:00.000Z',
+    lastActiveAt: '2026-10-15T10:15:00.000Z',
+  });
+
   // 1. Kedeputian Wilayah (1 s/d 14)
   const kepwilSeeds: Array<{ num: number; logins: number; menuUses: number; parentName: string }> = [
     { num: 4, logins: 52, menuUses: 268, parentName: 'KEDEPUTIAN WILAYAH IV (DKI Jakarta & Banten)' },

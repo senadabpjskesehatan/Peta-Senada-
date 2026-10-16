@@ -41,7 +41,7 @@ export default function InitialLoginPage({ citiesData, users, onLoginSuccess }: 
   };
 
   const loginTop5List = useMemo(() => {
-    const summaries = getUtilizationSummaries();
+    const summaries = getUtilizationSummaries().filter(s => s.role !== 'kantor_pusat');
     if (selectedMonthFilter === 'Semua') {
       const sorted = [...summaries].sort((a, b) => b.totalPemanfaatan - a.totalPemanfaatan);
       return sorted.slice(0, 5);
@@ -58,7 +58,7 @@ export default function InitialLoginPage({ citiesData, users, onLoginSuccess }: 
         if (d.getMonth() === targetMonthIndex) {
           let entry = countsMap.get(l.userId);
           if (!entry) {
-            const foundSummary = summaries.find(s => s.username === l.username || s.unitId === l.userId);
+            const foundSummary = getUtilizationSummaries().find(s => (s.username === l.username || s.unitId === l.userId) && s.role !== 'kantor_pusat');
             if (foundSummary) {
               entry = { logins: 0, menus: 0, unit: foundSummary };
               countsMap.set(foundSummary.unitId, entry);
@@ -71,12 +71,14 @@ export default function InitialLoginPage({ citiesData, users, onLoginSuccess }: 
         }
       });
 
-      const computed = Array.from(countsMap.values()).map(e => ({
-        ...e.unit,
-        loginCount: e.logins,
-        menuUsageCount: e.menus,
-        totalPemanfaatan: e.logins + e.menus,
-      }));
+      const computed = Array.from(countsMap.values())
+        .filter(e => e.unit.role !== 'kantor_pusat')
+        .map(e => ({
+          ...e.unit,
+          loginCount: e.logins,
+          menuUsageCount: e.menus,
+          totalPemanfaatan: e.logins + e.menus,
+        }));
 
       computed.sort((a, b) => b.totalPemanfaatan - a.totalPemanfaatan);
       return computed.slice(0, 5);

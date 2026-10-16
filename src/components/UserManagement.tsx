@@ -115,8 +115,9 @@ export default function UserManagement({
     const inactive = users.filter(u => u.status === 'nonaktif').length;
     const adminCount = users.filter(u => u.role === 'admin').length;
     const kepwilCount = users.filter(u => u.role === 'kepwil').length;
+    const pusatCount = users.filter(u => u.role === 'kantor_pusat').length;
     const cabangCount = users.filter(u => u.role === 'kantor_cabang').length;
-    return { total, active, inactive, adminCount, kepwilCount, cabangCount };
+    return { total, active, inactive, adminCount, kepwilCount, pusatCount, cabangCount };
   }, [users]);
 
   // Handle Quick Toggle Status
@@ -313,6 +314,13 @@ export default function UserManagement({
             User Kepwil
           </span>
         );
+      case 'kantor_pusat':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
+            <Building2 className="w-3.5 h-3.5 text-indigo-600" />
+            User Kantor Pusat
+          </span>
+        );
       case 'kantor_cabang':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-sky-50 text-sky-700 border border-sky-200">
@@ -397,6 +405,7 @@ export default function UserManagement({
               <option value="all">Semua Hak Akses ({users.length})</option>
               <option value="admin">Admin ({stats.adminCount})</option>
               <option value="kepwil">Kepwil ({stats.kepwilCount})</option>
+              <option value="kantor_pusat">Kantor Pusat ({stats.pusatCount})</option>
               <option value="kantor_cabang">Kantor Cabang ({stats.cabangCount})</option>
             </select>
           </div>
@@ -730,11 +739,14 @@ export default function UserManagement({
                 >
                   <option value="admin">User Admin (Akses seluruh menu & manajemen user)</option>
                   <option value="kepwil">User Kepwil (Menu Peta Nasional, Overview & SMS - View & Filter saja)</option>
+                  <option value="kantor_pusat">User Kantor Pusat (Menu Peta Nasional, SMS, Overview & Pemanfaatan Data - View & Filter saja)</option>
                   <option value="kantor_cabang">User Kantor Cabang (Menu Peta Nasional, Overview & SMS - View & Filter saja)</option>
                 </select>
                 <p className="text-[11px] text-slate-500 leading-tight">
                   {newRole === 'admin'
                     ? '✓ Akses seluruh menu dan aksi pengelolaan data.'
+                    : newRole === 'kantor_pusat'
+                    ? '✓ Akses melihat & memfilter data pada menu Peta Nasional, SMS, Overview, dan Pemanfaatan Data.'
                     : '✓ Akses melihat & memfilter data pada menu Peta Nasional, Overview, dan SMS.'}
                 </p>
               </div>
@@ -856,6 +868,7 @@ export default function UserManagement({
                 >
                   <option value="admin">User Admin (Akses seluruh menu & manajemen user)</option>
                   <option value="kepwil">User Kepwil (Menu Peta Nasional, Overview & SMS - View & Filter saja)</option>
+                  <option value="kantor_pusat">User Kantor Pusat (Menu Peta Nasional, SMS, Overview & Pemanfaatan Data - View & Filter saja)</option>
                   <option value="kantor_cabang">User Kantor Cabang (Menu Peta Nasional, Overview & SMS - View & Filter saja)</option>
                 </select>
                 {editingUser.username.toLowerCase() === 'senada' && (

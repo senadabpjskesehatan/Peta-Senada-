@@ -32,7 +32,7 @@ export function getUserDefaultFilters(
   availableKantorCabangList: string[] = [],
   citiesData: CityData[] = []
 ): UserDefaultFilterResult {
-  if (!user || user.role === 'admin') {
+  if (!user || user.role === 'admin' || user.role === 'kantor_pusat') {
     return { kepwil: 'Semua', kantorCabang: 'Semua' };
   }
 
@@ -208,11 +208,11 @@ export function getUserOfficeOrWilayahLabel(user: AppUser | null | undefined): {
 
   const userName = user.username || 'senada';
 
-  if (user.role === 'admin') {
+  if (user.role === 'admin' || user.role === 'kantor_pusat') {
     return {
       userName,
       officeName: user.displayName || 'Kantor Pusat (Nasional)',
-      typeLabel: 'Pusat / Admin',
+      typeLabel: user.role === 'admin' ? 'Pusat / Admin' : 'Kantor Pusat',
     };
   }
 

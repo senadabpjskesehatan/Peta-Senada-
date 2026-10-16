@@ -1351,6 +1351,8 @@ export default function App() {
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
                     currentUser?.role === 'kepwil'
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : currentUser?.role === 'kantor_pusat'
+                      ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
                       : 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
                   }`}>
                     {(currentUser?.username || 'U').charAt(0).toUpperCase()}
@@ -1361,9 +1363,11 @@ export default function App() {
                       <span className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded ${
                         currentUser?.role === 'kepwil'
                           ? 'bg-emerald-500/30 text-emerald-300'
+                          : currentUser?.role === 'kantor_pusat'
+                          ? 'bg-indigo-500/30 text-indigo-300'
                           : 'bg-sky-500/30 text-sky-300'
                       }`}>
-                        {currentUser?.role === 'kepwil' ? 'Kepwil' : 'Kantor Cabang'}
+                        {currentUser?.role === 'kepwil' ? 'Kepwil' : currentUser?.role === 'kantor_pusat' ? 'Kantor Pusat' : 'Kantor Cabang'}
                       </span>
                     </div>
                     <p className="text-[10px] text-slate-400 truncate">Akses: View & Filter Saja</p>
